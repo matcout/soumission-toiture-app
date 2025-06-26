@@ -7,23 +7,63 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "scheme": "soumissiontoitureclean",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.matcout.SoumissionToitureClean",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Cette app a besoin d'accéder à la caméra pour prendre des photos des projets de toiture.",
+        "NSPhotoLibraryUsageDescription": "Cette app a besoin d'accéder à la galerie pour sauvegarder les photos des projets.",
+        "NSMicrophoneUsageDescription": "Cette app a besoin d'accéder au microphone pour la fonctionnalité caméra."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-dev-client",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Cette app a besoin d'accéder aux photos pour documenter les projets de toiture.",
+          "cameraPermission": "Cette app a besoin d'accéder à la caméra pour prendre des photos des projets de toiture."
+        }
+      ],
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "Cette app a besoin d'accéder à la caméra pour prendre des photos instantanées des projets de toiture.",
+          "enableMicrophonePermission": false
+        }
+      ],
+      [
+        "expo-mail-composer",
+        {}
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "1adb1175-bd59-445c-a409-2772127506aa"
+      }
     }
   }
 }

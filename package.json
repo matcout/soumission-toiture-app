@@ -9,10 +9,20 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@react-native-picker/picker": "2.11.0",
     "expo": "~53.0.12",
+    "expo-dev-client": "~5.2.1",
+    "expo-file-system": "~18.1.10",
+    "expo-image-picker": "~16.1.4",
+    "expo-mail-composer": "~14.1.4",
+    "expo-screen-orientation": "~8.1.7",
     "expo-status-bar": "~2.2.3",
+    "prop-types": "^15.8.1",
     "react": "19.0.0",
-    "react-native": "0.79.4"
+    "react-native": "0.79.4",
+    "react-native-picker-select": "^9.3.1",
+    "react-native-share": "^12.1.0",
+    "react-native-vision-camera": "^4.7.0"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0"
