@@ -13,14 +13,14 @@ import {
   Platform,
   Dimensions,
   Share,
-  Linking
+  KeyboardAvoidingView
 } from 'react-native';
 
 import RNPickerSelect from 'react-native-picker-select';
 import { StatusBar } from 'expo-status-bar';
 import { FontAwesome5 } from '@expo/vector-icons';
 import CustomCamera from './CustomCamera';
-import * as MailComposer from 'expo-mail-composer';
+
 import * as FileSystem from 'expo-file-system';
 
 const { width } = Dimensions.get('window');
@@ -117,16 +117,7 @@ const shareWithRNShare = async () => {
     }
 
  
-
-
-// 2. Modifier le handler pour le téléphone
-const handlePhoneChange = (text) => {
-  const formatted = formatPhoneNumber(text);
-  setFormData({...formData, telephone: formatted});
-};
-
-
-    // Créer un fichier texte avec le rapport complet
+  // Créer un fichier texte avec le rapport complet
     const reportFileName = `rapport_${(formData.nom || 'client').replace(/[^a-zA-Z0-9]/g, '_')}.txt`;
     const reportPath = `${FileSystem.documentDirectory}${reportFileName}`;
     await FileSystem.writeAsStringAsync(reportPath, report);
@@ -137,7 +128,7 @@ const handlePhoneChange = (text) => {
     // 🎯 PARTAGE NATIF AVEC TOUT !
     await RNShare.open({
       title: subject,
-      message: `📄 Soumission complète avec ${photos.length} photo${photos.length > 1 ? 's' : ''}`,
+      message: `Soumission complète avec ${photos.length} photo${photos.length > 1 ? 's' : ''}`,
       urls: allFiles,
       subject: subject,
       showAppsToView: true,
@@ -154,10 +145,18 @@ const handlePhoneChange = (text) => {
 
     showNotification(`Rapport et ${photos.length} photo${photos.length > 1 ? 's' : ''} partagés !`, 'success');
 
-  } catch (error) {
-    console.error('Erreur react-native-share:', error);
-    showNotification('Erreur lors du partage', 'error');
+} catch (error) {
+  // 🎯 GÉRER L'ANNULATION UTILISATEUR
+  if (error.message === 'User did not share') {
+    // L'utilisateur a annulé - c'est normal, pas d'erreur
+    console.log('Utilisateur a annulé le partage');
+    return;
   }
+  
+  // Vraie erreur
+  console.error('Erreur react-native-share:', error);
+  showNotification('Erreur lors du partage', 'error');
+}
 };
 
 
@@ -236,248 +235,34 @@ ${currentDate} ${currentTime}
     return report;
   };
 
-  // Fonction pour exporter vers Evernote via email AVEC PHOTOS
-  const exportToEvernoteWithPhotos = async () => {
-    try {
-      // Vérifier si Mail est disponible
-      const isAvailable = await MailComposer.isAvailableAsync();
-      if (!isAvailable) {
-        Alert.alert('Erreur', 'Email non disponible sur cet appareil');
-        return;
+ 
+// Fonction mise à jour pour le choix d'export AVEC PHOTOS
+const handleEvernoteExport = () => {
+  if (!formData.adresse.trim()) {
+    showNotification('Adresse du projet requise pour export', 'error');
+    return;
+  }
+
+  const hasPhotos = photos.length > 0;
+  
+  Alert.alert(
+    'Exporter vers Evernote',
+    hasPhotos 
+      ? `Exporter la soumission avec ${photos.length} photo${photos.length > 1 ? 's' : ''} ?`
+      : 'Exporter la soumission (aucune photo) ?',
+    [
+      {
+        text: 'Annuler',
+        style: 'cancel'
+      },
+      {
+        text: 'Partage natif TOUT',
+        onPress: shareWithRNShare,
+        style: 'default'
       }
-
-      const report = generateEvernoteReport();
-      const subject = `SOUMISSION - ${formData.nom || 'Client'} - ${formData.adresse || 'Projet'}`;
-      const evernoteEmail = "matcout3125.4cbb296@m.evernote.com"; // ← À personnaliser
-
-      // Préparer les photos comme attachements
-      const attachments = [];
-      
-      for (let i = 0; i < photos.length; i++) {
-        const photo = photos[i];
-        try {
-          // Copier la photo vers un dossier temporaire avec nom descriptif
-          const fileName = `photo_${i + 1}_${(formData.nom || 'client').replace(/[^a-zA-Z0-9]/g, '_')}.jpg`;
-          const newPath = `${FileSystem.documentDirectory}${fileName}`;
-          
-          await FileSystem.copyAsync({
-            from: photo.uri,
-            to: newPath
-          });
-          
-          attachments.push(newPath);
-        } catch (error) {
-          console.error(`Erreur copie photo ${i + 1}:`, error);
-        }
-      }
-
-      // Composer l'email avec photos
-      const emailOptions = {
-        recipients: [evernoteEmail],
-        subject: subject,
-        body: report,
-        attachments: attachments,
-      };
-
-      const result = await MailComposer.composeAsync(emailOptions);
-      
-      if (result.status === 'sent') {
-        showNotification(`Email envoyé avec ${photos.length} photo${photos.length > 1 ? 's' : ''} !`, 'success');
-      } else if (result.status === 'saved') {
-        showNotification('Email sauvegardé en brouillon avec photos', 'success');
-      } else {
-        showNotification('Email avec photos préparé', 'success');
-      }
-
-      // Nettoyer les fichiers temporaires
-      for (const attachment of attachments) {
-        try {
-          await FileSystem.deleteAsync(attachment);
-        } catch (error) {
-          console.error('Erreur nettoyage:', error);
-        }
-      }
-
-    } catch (error) {
-      console.error('Erreur export avec photos:', error);
-      showNotification('Erreur lors de l\'export avec photos', 'error');
-    }
-  };
-
-  // Fonction pour exporter vers Evernote via email SIMPLE (sans photos)
-  const exportToEvernoteEmail = async () => {
-    const report = generateEvernoteReport();
-    const subject = `SOUMISSION - ${formData.nom || 'Client'} - ${formData.adresse || 'Projet'}`;
-    
-    // Email Evernote - remplacez par votre adresse Evernote personnelle
-    const evernoteEmail = "votre-email@m.evernote.com"; // ← À personnaliser
-    
-    const emailUrl = `mailto:${evernoteEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(report)}`;
-    
-    try {
-      const canOpen = await Linking.canOpenURL(emailUrl);
-      if (canOpen) {
-        await Linking.openURL(emailUrl);
-        showNotification('Export Evernote ouvert dans Mail', 'success');
-      } else {
-        // Fallback - partage natif
-        await Share.share({
-          message: report,
-          title: subject,
-        });
-        showNotification('Rapport partagé', 'success');
-      }
-    } catch (error) {
-      console.error('Erreur export Evernote:', error);
-      showNotification('Erreur lors de l\'export', 'error');
-    }
-  };
-
- // Fonction corrigée spécialement pour Evernote
-  const shareReportWithPhotos = async () => {
-    try {
-      const report = generateEvernoteReport();
-      const subject = `SOUMISSION - ${formData.nom || 'Client'} - ${formData.adresse || 'Projet'}`;
-      
-      if (photos.length === 0) {
-        // Aucune photo - partage simple du rapport complet
-        await Share.share({
-          message: report,
-          title: subject,
-        });
-        showNotification('Rapport partagé', 'success');
-        return;
-      }
-
-      if (photos.length === 1) {
-        // Une seule photo - partage avec le rapport complet + photo
-        await Share.share({
-          message: report, // ⭐ Rapport COMPLET dans le message pour Evernote
-          title: subject,
-          url: photos[0].uri,
-        });
-        showNotification('Rapport complet et photo partagés', 'success');
-        return;
-      }
-
-      // Plusieurs photos - donner le choix à l'utilisateur
-      Alert.alert(
-        'Partager avec Evernote',
-        `Comment voulez-vous partager votre soumission avec ${photos.length} photos ?`,
-        [
-          {
-            text: 'Rapport seul',
-            onPress: async () => {
-              await Share.share({
-                message: report, // Rapport complet
-                title: subject,
-              });
-              showNotification('Rapport complet partagé', 'success');
-            }
-          },
-          {
-            text: 'Rapport + 1ère photo',
-            onPress: async () => {
-              await Share.share({
-                message: `${report}\n\n📸 PHOTOS: ${photos.length} photos prises (première photo ci-jointe, autres disponibles dans l'app)`,
-                title: subject,
-                url: photos[0].uri,
-              });
-              showNotification('Rapport + première photo partagés', 'success');
-            }
-          },
-          {
-            text: 'Photos une par une',
-            onPress: async () => {
-              // D'abord partager le rapport
-              await Share.share({
-                message: report,
-                title: subject,
-              });
-              
-              // Ensuite chaque photo individuellement
-              for (let i = 0; i < photos.length; i++) {
-                await new Promise(resolve => setTimeout(resolve, 1000)); // Pause d'1 seconde
-                try {
-                  await Share.share({
-                    message: `📸 Photo ${i + 1}/${photos.length} - ${formData.adresse || 'Projet'}`,
-                    url: photos[i].uri,
-                  });
-                } catch (error) {
-                  console.error(`Erreur photo ${i + 1}:`, error);
-                }
-              }
-              showNotification(`Rapport + ${photos.length} photos partagés`, 'success');
-            }
-          },
-          {
-            text: 'Annuler',
-            style: 'cancel'
-          }
-        ]
-      );
-
-    } catch (error) {
-      console.error('Erreur partage:', error);
-      showNotification('Erreur lors du partage', 'error');
-    }
-  };
-
-  // Fonction pour partage natif SIMPLE (AirDrop, Evernote app, etc.)
-  const shareReport = async () => {
-    const report = generateEvernoteReport();
-    const subject = `SOUMISSION - ${formData.nom || 'Client'} - ${formData.adresse || 'Projet'}`;
-    
-    try {
-      await Share.share({
-        message: report,
-        title: subject,
-      }, {
-        dialogTitle: 'Partager la soumission',
-        subject: subject,
-      });
-      showNotification('Rapport partagé', 'success');
-    } catch (error) {
-      console.error('Erreur partage:', error);
-      showNotification('Erreur lors du partage', 'error');
-    }
-  };
-
-  // Fonction mise à jour pour le choix d'export AVEC PHOTOS
-  const handleEvernoteExport = () => {
-    if (!formData.adresse.trim()) {
-      showNotification('Adresse du projet requise pour export', 'error');
-      return;
-    }
-
-    const hasPhotos = photos.length > 0;
-    
-    Alert.alert(
-      'Exporter vers Evernote',
-      hasPhotos 
-        ? `Exporter la soumission avec ${photos.length} photo${photos.length > 1 ? 's' : ''} ?`
-        : 'Exporter la soumission (aucune photo) ?',
-      [
-        {
-          text: 'Annuler',
-          style: 'cancel'
-        },
-        {
-          text: 'Email simple',
-          onPress: exportToEvernoteEmail
-        },
-       ...(hasPhotos ? [{
-  text: '🚀 Partage natif TOUT',
-  onPress: shareWithRNShare,
-  style: 'default'
-}] : []),
-        {
-          text: 'Partage natif',
-          onPress: hasPhotos ? shareReportWithPhotos : shareReport
-        }
-      ]
-    );
-  };
+    ]
+  );
+};
 
   const generatePickerItems = (start, end) => {
     return Array.from({ length: end - start + 1 }, (_, i) => ({
@@ -683,7 +468,12 @@ ${currentDate} ${currentTime}
         <Text style={styles.subtitle}>Capturez des photos et enregistrez votre projet</Text>
       </View>
 
-      <ScrollView style={styles.scrollContainer}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+         <ScrollView 
+    style={styles.scrollContainer}
+    keyboardShouldPersistTaps="handled"
+    contentContainerStyle={{ paddingBottom: 100 }}
+         >
         {/* Section Informations client */}
         <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('client')}>
           <FontAwesome5 name="user" size={20} color="white" />
@@ -1025,7 +815,7 @@ ${currentDate} ${currentTime}
 
             {/* Section Puits de lumière */}
             <View style={styles.dimSectionContainer}>
-              <Text style={styles.subSectionHeader}>💡 Puits de lumière (en pouces)</Text>
+              <Text style={styles.subSectionHeader}>Puits de lumière (en pouces)</Text>
               
               {formData.puitsLumiere.map((puit, index) => (
                 <View key={`puit-${index}`} style={[styles.dimSetContainer, { marginBottom: 10 }]}>
@@ -1130,7 +920,7 @@ ${currentDate} ${currentTime}
                     style={styles.deleteButton}
                     onPress={() => deletePhoto(photo.id)}
                   >
-                    <Text style={{color: 'white', fontSize: 16}}>🗑️</Text>
+                    <Text style={{color: 'white', fontSize: 16}}>❌</Text>
                   </TouchableOpacity>
                 </TouchableOpacity>
               ))}
@@ -1191,7 +981,7 @@ ${currentDate} ${currentTime}
               style={styles.checkboxItem} 
               onPress={() => setFormData({...formData, trackfall: !formData.trackfall})}
             >
-              <Text style={{fontSize: 32, color: '#3498db'}}>
+              <Text style={{fontSize: 32, color: '#3498db'}}>  
                 {formData.trackfall ? '☑' : '☐'}
               </Text>
               <Text style={styles.checkboxLabel}>Trackfall et chute</Text>
@@ -1240,6 +1030,7 @@ ${currentDate} ${currentTime}
           </TouchableOpacity>
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Caméra Custom Modal */}
       <CustomCamera
