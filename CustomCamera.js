@@ -10,11 +10,11 @@ import {
   Platform,
   Dimensions,
   Image,
+  ScrollView,
 } from 'react-native';
 import { Camera, useCameraDevices, useCameraPermission } from 'react-native-vision-camera';
 import { FontAwesome5 } from '@expo/vector-icons';
 
-// ⭐ DIMENSIONS DYNAMIQUES pour rotation (compatible Expo Go)
 const CustomCamera = ({ visible, onClose, onPhotoTaken }) => {
   const camera = useRef(null);
   const devices = useCameraDevices();
@@ -26,11 +26,9 @@ const CustomCamera = ({ visible, onClose, onPhotoTaken }) => {
   const [photoCount, setPhotoCount] = useState(0);
   const [lastPhotoFeedback, setLastPhotoFeedback] = useState(false);
   const [flashAnimation, setFlashAnimation] = useState(false);
-  const [lastPhotoUri, setLastPhotoUri] = useState(null);
-  const [showMiniature, setShowMiniature] = useState(false);
   const [screenData, setScreenData] = useState(Dimensions.get('window'));
+  const [sessionPhotos, setSessionPhotos] = useState([]);
 
-  // ⭐ NOUVEAU: Écouter les changements d'orientation (compatible Expo Go)
   useEffect(() => {
     const subscription = Dimensions.addEventListener('change', ({ window }) => {
       setScreenData(window);
@@ -42,6 +40,7 @@ const CustomCamera = ({ visible, onClose, onPhotoTaken }) => {
     if (visible) {
       setIsActive(true);
       setPhotoCount(0);
+      setSessionPhotos([]);
       if (!hasPermission) {
         requestPermission();
       }
@@ -50,7 +49,6 @@ const CustomCamera = ({ visible, onClose, onPhotoTaken }) => {
     }
   }, [visible, hasPermission]);
 
-  // ⭐ NOUVEAU: Dimensions dynamiques selon orientation
   const { width, height } = screenData;
   const isLandscape = width > height;
 
@@ -61,50 +59,34 @@ const CustomCamera = ({ visible, onClose, onPhotoTaken }) => {
         return;
       }
 
-      // 1. Animation flash blanc instantané (style iPhone)
+      // Animation flash blanc
       setFlashAnimation(true);
       setTimeout(() => setFlashAnimation(false), 150);
 
-      // 2. Feedback visuel rapide
+      // Feedback visuel
       setLastPhotoFeedback(true);
       setTimeout(() => setLastPhotoFeedback(false), 800);
 
-      // Prendre la photo INSTANTANÉMENT avec format optimisé
       const photo = await camera.current.takePhoto({
         quality: 0.8,
         flash: flash,
         enableAutoRedEyeReduction: true,
-        // ⭐ NOUVEAU: Format optimisé selon orientation
         format: 'jpeg',
       });
 
-      // Photo prise avec succès
       const newPhoto = {
         id: Date.now().toString(),
         uri: Platform.OS === 'ios' ? `file://${photo.path}` : photo.path,
       };
 
-      // 3. Sauvegarder pour miniature
-      setLastPhotoUri(newPhoto.uri);
-      
-      // 4. Animation miniature (apparition avec effet)
-      setShowMiniature(true);
-      setTimeout(() => setShowMiniature(false), 1000);
-
-      // Incrémenter le compteur
+      setSessionPhotos(prev => [...prev, newPhoto]);
       setPhotoCount(prev => prev + 1);
-
-      // Envoyer la photo SANS fermer la caméra
       onPhotoTaken(newPhoto);
 
     } catch (error) {
       console.error('Erreur lors de la prise de photo:', error);
       Alert.alert('Erreur', 'Impossible de prendre la photo');
     }
-  };
-
-  const toggleFlash = () => {
-    setFlash(current => current === 'off' ? 'on' : 'off');
   };
 
   const finishAndClose = () => {
@@ -115,19 +97,11 @@ const CustomCamera = ({ visible, onClose, onPhotoTaken }) => {
     return (
       <Modal visible={visible} animationType="slide">
         <View style={styles.permissionContainer}>
-          <Text style={styles.permissionText}>
-            Permission caméra requise
-          </Text>
-          <TouchableOpacity 
-            style={styles.permissionButton}
-            onPress={requestPermission}
-          >
+          <Text style={styles.permissionText}>Permission caméra requise</Text>
+          <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
             <Text style={styles.permissionButtonText}>Autoriser</Text>
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.closeButton}
-            onPress={onClose}
-          >
+          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
             <Text style={styles.closeButtonText}>Fermer</Text>
           </TouchableOpacity>
         </View>
@@ -160,26 +134,24 @@ const CustomCamera = ({ visible, onClose, onPhotoTaken }) => {
   return (
     <Modal visible={visible} animationType="slide">
       <StatusBar hidden />
-      <View style={[styles.container, { width, height }]}>
+      <View style={styles.container}>
+        {/* Caméra plein écran */}
         <Camera
           ref={camera}
-          style={[styles.camera, { width, height }]}
+          style={styles.camera}
           device={device}
           isActive={isActive && visible}
           photo={true}
           enableZoomGesture={true}
-          // ⭐ NOUVEAU: Utiliser toute la surface disponible
           resizeMode="cover"
         />
         
-        {/* Animation Flash Blanc (style iPhone) */}
-        {flashAnimation && (
-          <View style={[styles.flashOverlay, { width, height }]} />
-        )}
+        {/* Animation Flash */}
+        {flashAnimation && <View style={styles.flashOverlay} />}
         
-        {/* Feedback visuel pour photo prise */}
+        {/* Feedback photo prise */}
         {lastPhotoFeedback && (
-          <View style={[styles.photoFeedback, isLandscape && styles.photoFeedbackLandscape]}>
+          <View style={styles.photoFeedback}>
             <View style={styles.feedbackIcon}>
               <FontAwesome5 name="check-circle" size={30} color="#27ae60" />
             </View>
@@ -187,90 +159,61 @@ const CustomCamera = ({ visible, onClose, onPhotoTaken }) => {
           </View>
         )}
         
-        {/* Miniature de la dernière photo avec animation */}
-        {showMiniature && lastPhotoUri && (
-          <View style={[styles.miniatureContainer, isLandscape && styles.miniatureContainerLandscape]}>
-            <View style={[styles.miniature, showMiniature && styles.miniatureVisible]}>
-              <Image source={{ uri: lastPhotoUri }} style={styles.miniatureImage} />
-              <View style={styles.miniatureOverlay}>
-                <FontAwesome5 name="plus" size={16} color="white" />
-              </View>
-            </View>
+        {/* Bouton fermer (haut gauche) */}
+        <TouchableOpacity style={styles.closeButtonTop} onPress={finishAndClose}>
+          <View style={styles.closeButtonCircle}>
+            <FontAwesome5 name="times" size={20} color="white" />
+          </View>
+        </TouchableOpacity>
+
+        {/* Galerie miniatures (bas gauche) */}
+        {sessionPhotos.length > 0 && (
+          <View style={styles.galleryContainer}>
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.galleryContent}
+            >
+              {sessionPhotos.slice(-6).map((photo, index) => (
+                <View key={photo.id} style={styles.miniatureWrapper}>
+                  <Image source={{ uri: photo.uri }} style={styles.miniatureImage} />
+                </View>
+              ))}
+            </ScrollView>
           </View>
         )}
-        
-        {/* Overlay avec contrôles adaptés à l'orientation */}
-        <View style={[styles.overlay, { width, height }]}>
-          {/* Header avec bouton fermer, compteur et flash */}
-          <View style={[styles.header, isLandscape && styles.headerLandscape]}>
-            <TouchableOpacity 
-              style={styles.headerButton}
-              onPress={finishAndClose}
-            >
-              <FontAwesome5 name="times" size={24} color="white" />
+
+        {/* Interface du bas - Style iOS natif */}
+        <View style={styles.bottomInterface}>
+          {/* Mode PHOTO centré */}
+          <View style={styles.modeContainer}>
+            <Text style={styles.modeText}>PHOTO</Text>
+          </View>
+
+          {/* Contrôles du bas */}
+          <View style={styles.bottomControls}>
+            {/* Bouton Annuler */}
+            <TouchableOpacity style={styles.cancelButton} onPress={finishAndClose}>
+              <Text style={styles.cancelText}>Annuler</Text>
             </TouchableOpacity>
-            
-            <View style={styles.titleContainer}>
-              <Text style={styles.title}>
-                Photos Projet {isLandscape && '🔄 (Mode Large)'}
-              </Text>
-              {photoCount > 0 && (
-                <Text style={styles.photoCounter}>{photoCount} photo{photoCount > 1 ? 's' : ''} prise{photoCount > 1 ? 's' : ''}</Text>
-              )}
-            </View>
-            
+
+            {/* Bouton capture central */}
+            <TouchableOpacity style={styles.captureButtonNative} onPress={takePhoto}>
+              <View style={styles.captureButtonInnerNative} />
+            </TouchableOpacity>
+
+            {/* Bouton Enregistrer */}
             <TouchableOpacity 
-              style={styles.headerButton}
-              onPress={toggleFlash}
+              style={[styles.saveButton, { opacity: sessionPhotos.length > 0 ? 1 : 0.3 }]} 
+              onPress={sessionPhotos.length > 0 ? finishAndClose : null}
+              disabled={sessionPhotos.length === 0}
             >
-              <FontAwesome5 
-                name={flash === 'on' ? 'bolt' : 'bolt'} 
-                size={24} 
-                color={flash === 'on' ? '#f39c12' : 'white'} 
-              />
+              <Text style={styles.saveText}>Enregistrer</Text>
             </TouchableOpacity>
           </View>
 
-          {/* Instructions adaptées */}
-          <View style={[styles.instructionsContainer, isLandscape && styles.instructionsLandscape]}>
-            <Text style={styles.instructions}>
-              {photoCount === 0 
-                ? (isLandscape ? "🔄 Mode paysage détecté - champ plus large ! Capturez la toiture" : "Visez la toiture et appuyez pour capturer")
-                : "Continuez à prendre des photos ou fermez quand terminé"
-              }
-            </Text>
-          </View>
-
-          {/* Footer avec boutons adaptés */}
-          <View style={[styles.footer, isLandscape && styles.footerLandscape]}>
-            <View style={[styles.buttonRow, isLandscape && styles.buttonRowLandscape]}>
-              {/* Bouton Terminé (si photos prises) */}
-              {photoCount > 0 && (
-                <TouchableOpacity 
-                  style={styles.doneButton}
-                  onPress={finishAndClose}
-                >
-                  <FontAwesome5 name="check" size={20} color="white" />
-                  <Text style={styles.doneButtonText}>Terminé</Text>
-                </TouchableOpacity>
-              )}
-              
-              {/* Bouton de capture principal */}
-              <TouchableOpacity 
-                style={styles.captureButton}
-                onPress={takePhoto}
-              >
-                <View style={styles.captureButtonInner} />
-              </TouchableOpacity>
-              
-              {/* Espace pour symétrie */}
-              {photoCount > 0 && <View style={styles.spacer} />}
-            </View>
-            
-            <Text style={styles.captureText}>
-              📸 Capture continue {isLandscape ? '📱 (Horizontal)' : '📱 (Vertical)'}
-            </Text>
-          </View>
+          {/* Barre de progression du bas */}
+          <View style={styles.progressBar} />
         </View>
       </View>
     </Modal>
@@ -285,133 +228,35 @@ const styles = StyleSheet.create({
   camera: {
     flex: 1,
   },
-  overlay: {
+  
+  // Bouton fermer (haut gauche)
+  closeButtonTop: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 60 : 40,
+    left: 20,
+    zIndex: 100,
+  },
+  closeButtonCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  // Flash overlay
+  flashOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    justifyContent: 'space-between',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: Platform.OS === 'ios' ? 50 : 30,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-  },
-  // ⭐ NOUVEAU: Styles pour mode paysage
-  headerLandscape: {
-    paddingTop: Platform.OS === 'ios' ? 20 : 10,
-    paddingHorizontal: 40,
-  },
-  headerButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  titleContainer: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  title: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  photoCounter: {
-    color: '#27ae60',
-    fontSize: 14,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  instructionsContainer: {
-    alignItems: 'center',
-    paddingHorizontal: 40,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    paddingVertical: 15,
-    marginHorizontal: 20,
-    borderRadius: 10,
-  },
-  // ⭐ NOUVEAU: Instructions en mode paysage
-  instructionsLandscape: {
-    marginHorizontal: 60,
-    paddingVertical: 10,
-  },
-  instructions: {
-    color: 'white',
-    fontSize: 15,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  footer: {
-    alignItems: 'center',
-    paddingBottom: Platform.OS === 'ios' ? 40 : 30,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    paddingTop: 20,
-  },
-  // ⭐ NOUVEAU: Footer en mode paysage
-  footerLandscape: {
-    paddingBottom: Platform.OS === 'ios' ? 20 : 15,
-    paddingHorizontal: 40,
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 15,
-    width: '100%',
-  },
-  // ⭐ NOUVEAU: Boutons en mode paysage
-  buttonRowLandscape: {
-    marginBottom: 10,
-  },
-  captureButton: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
     backgroundColor: 'white',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 4,
-    borderColor: '#3498db',
+    zIndex: 5,
   },
-  captureButtonInner: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#3498db',
-  },
-  doneButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#27ae60',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 25,
-    position: 'absolute',
-    left: 20,
-  },
-  doneButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  spacer: {
-    width: 100,
-  },
-  captureText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '500',
-  },
+
+  // Feedback photo
   photoFeedback: {
     position: 'absolute',
     top: '45%',
@@ -419,10 +264,6 @@ const styles = StyleSheet.create({
     right: 0,
     alignItems: 'center',
     zIndex: 10,
-  },
-  // ⭐ NOUVEAU: Feedback en mode paysage
-  photoFeedbackLandscape: {
-    top: '40%',
   },
   feedbackIcon: {
     marginBottom: 10,
@@ -436,56 +277,109 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 20,
   },
-  flashOverlay: {
+
+  // Galerie miniatures
+  galleryContainer: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'white',
-    zIndex: 5,
-  },
-  miniatureContainer: {
-    position: 'absolute',
-    bottom: 120,
+    bottom: 200,
     left: 20,
     zIndex: 10,
+    maxWidth: 350, // Augmenté pour 6 miniatures
   },
-  // ⭐ NOUVEAU: Miniature en mode paysage
-  miniatureContainerLandscape: {
-    bottom: 80,
-    left: 40,
+  galleryContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  miniature: {
-    width: 80,
-    height: 80,
-    borderRadius: 12,
-    overflow: 'hidden',
-    borderWidth: 3,
-    borderColor: 'white',
-    opacity: 0,
-    transform: [{ scale: 0.5 }],
-  },
-  miniatureVisible: {
-    opacity: 1,
-    transform: [{ scale: 1 }],
+  miniatureWrapper: {
+    marginRight: 8,
   },
   miniatureImage: {
-    width: '100%',
-    height: '100%',
+    width: 50,
+    height: 50,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: 'white',
   },
-  miniatureOverlay: {
+
+  // Interface du bas - Style iOS natif
+  bottomInterface: {
     position: 'absolute',
-    top: 5,
-    right: 5,
-    backgroundColor: '#27ae60',
-    borderRadius: 10,
-    width: 20,
-    height: 20,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'black',
+    paddingBottom: Platform.OS === 'ios' ? 40 : 20,
+  },
+
+  // Mode PHOTO
+  modeContainer: {
+    alignItems: 'center',
+    paddingVertical: 15,
+  },
+  modeText: {
+    color: '#00FF00', // Vert comme dans l'image
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: 2,
+  },
+
+  // Contrôles du bas
+  bottomControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 40,
+    paddingVertical: 20,
+  },
+
+  // Bouton Annuler (gauche)
+  cancelButton: {
+    minWidth: 80,
+  },
+  cancelText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '400',
+  },
+
+  // Bouton capture central - Style iOS natif
+  captureButtonNative: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 4,
+    borderColor: 'white',
+    backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  // Styles pour les erreurs et permissions
+  captureButtonInnerNative: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'white',
+  },
+
+  // Bouton Enregistrer (droite)
+  saveButton: {
+    minWidth: 80,
+    alignItems: 'flex-end',
+  },
+  saveText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '400',
+  },
+
+  // Barre de progression du bas
+  progressBar: {
+    height: 4,
+    backgroundColor: 'white',
+    marginHorizontal: 20,
+    borderRadius: 2,
+  },
+
+  // Styles pour erreurs et permissions
   permissionContainer: {
     flex: 1,
     justifyContent: 'center',

@@ -1013,21 +1013,24 @@ const handleEvernoteExport = () => {
         )}
 
         {/* Boutons avec Export Evernote */}
-        <View style={styles.buttonContainer}>
+       <View style={styles.buttonContainer}>
+        {/* Première ligne - Export Evernote seul */}
+        <TouchableOpacity style={styles.evernoteButtonFull} onPress={handleEvernoteExport}>
+          <FontAwesome5 name="file-export" size={18} color="white" />
+          <Text style={styles.buttonText}>Export Evernote</Text>
+          </TouchableOpacity>
+         
+          <View style={styles.secondRowButtons}>
           <TouchableOpacity style={styles.saveButton} onPress={enregistrerSoumission}>
             <FontAwesome5 name="save" size={18} color="white" />
             <Text style={styles.buttonText}>Enregistrer</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity style={styles.evernoteButton} onPress={handleEvernoteExport}>
-            <FontAwesome5 name="file-export" size={18} color="white" />
-            <Text style={styles.buttonText}>Export Evernote</Text>
           </TouchableOpacity>
           
           <TouchableOpacity style={styles.resetButton} onPress={resetForm}>
             <FontAwesome5 name="redo" size={18} color="#2c3e50" />
             <Text style={styles.resetButtonText}>Réinitialiser</Text>
           </TouchableOpacity>
+           </View>
         </View>
       </ScrollView>
       </KeyboardAvoidingView>
@@ -1273,7 +1276,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0,
     right: 0,
-    backgroundColor: 'rgba(231, 76, 60, 0.9)',
+
     padding: 5,
     borderTopLeftRadius: 5,
   },
@@ -1301,8 +1304,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
   },
   buttonContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
     marginHorizontal: 10,
     marginTop: 20,
     marginBottom: 30,
@@ -1314,30 +1315,33 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    flex: 1,
-    marginHorizontal: 5,
+    flex: 0.48, // Prend 48% de la largeur
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
   },
-  evernoteButton: {
+evernoteButtonFull: {
     flexDirection: 'row',
     backgroundColor: '#2dbe60',
     padding: 15,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    flex: 1,
-    marginHorizontal: 5,
+    marginBottom: 10, // Espace entre les lignes
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
   },
-  resetButton: {
+    // Conteneur pour la deuxième ligne
+  secondRowButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+ resetButton: {
     flexDirection: 'row',
     backgroundColor: 'white',
     borderWidth: 1,
@@ -1346,15 +1350,14 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    flex: 1,
-    marginHorizontal: 5,
+    flex: 0.48, // Prend 48% de la largeur
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 3.84,
     elevation: 3,
   },
-  buttonText: {
+ buttonText: {
     color: 'white',
     fontWeight: '600',
     fontSize: 16,
