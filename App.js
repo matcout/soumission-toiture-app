@@ -15,13 +15,14 @@ import {
   Share,
   KeyboardAvoidingView
 } from 'react-native';
-
+import { saveSubmissionToFirebase } from './firebaseFunctions';
 import RNPickerSelect from 'react-native-picker-select';
 import { StatusBar } from 'expo-status-bar';
 import { FontAwesome5 } from '@expo/vector-icons';
 import CustomCamera from './CustomCamera';
 
 import * as FileSystem from 'expo-file-system';
+import { testFirebaseConnection } from './firebase';
 
 const { width } = Dimensions.get('window');
 
@@ -41,8 +42,6 @@ const App = () => {
     nbEvents: 0,
     nbDrains: 0,
     trepiedElectrique: 0,
-    ff180: 0,
-    armorbound180: 0,
     plusieursEpaisseurs: false,
     hydroQuebec: false,
     grue: false,
@@ -60,51 +59,63 @@ const App = () => {
   const [selectedPhoto, setSelectedPhoto] = useState(null);
   const [notification, setNotification] = useState({ visible: false, message: '', type: '' });
   const [date] = useState(new Date());
-  const [activeSection, setActiveSection] = useState(null);
-  const [showCamera, setShowCamera] = useState(false);
-  const formatPhoneNumber = (value) => {
-  const cleaned = value.replace(/\D/g, '');
-  const limited = cleaned.slice(0, 10);
   
-  if (limited.length >= 6) {
-    return `${limited.slice(0, 3)}-${limited.slice(3, 6)}-${limited.slice(6)}`;
-  } else if (limited.length >= 3) {
-    return `${limited.slice(0, 3)}-${limited.slice(3)}`;
-  } else {
-    return limited;
+  // 🎯 CHANGEMENT PRINCIPAL : Array au lieu de string
+  const [openSections, setOpenSections] = useState([]);
+  
+  const [showCamera, setShowCamera] = useState(false);
+
+  const formatPhoneNumber = (value) => {
+    const cleaned = value.replace(/\D/g, '');
+    const limited = cleaned.slice(0, 10);
+    
+    if (limited.length >= 6) {
+      return `${limited.slice(0, 3)}-${limited.slice(3, 6)}-${limited.slice(6)}`;
+    } else if (limited.length >= 3) {
+      return `${limited.slice(0, 3)}-${limited.slice(3)}`;
+    } else {
+      return limited;
+    }
+  };
+
+  const handlePhoneChange = (text) => {
+    const formatted = formatPhoneNumber(text);
+    setFormData({...formData, telephone: formatted});
+  };
+
+ useEffect(() => {
+  let totalToiture = formData.dimensions.reduce((sum, section) => {
+    const length = parseFloat(section.length) || 0;
+    const width = parseFloat(section.width) || 0;
+    return sum + (length * width);
+  }, 0);
+
+  let totalParapets = formData.parapets.reduce((sum, parapet) => {
+    const lengthInFeet = parseFloat(parapet.length) || 0;
+    const widthInInches = parseFloat(parapet.width) || 0;
+    return sum + (lengthInFeet * (widthInInches / 12));
+  }, 0);
+
+  setSuperficie({
+    toiture: totalToiture,
+    parapets: totalParapets,
+    totale: Math.max(0, (totalToiture + totalParapets))
+  });
+
+  // ✅ AJOUT ICI - APRÈS setSuperficie, pas dedans !
+  if (formData.nom === '' && formData.adresse === '') {
+    testFirebaseConnection();
   }
-};
 
-const handlePhoneChange = (text) => {
-  const formatted = formatPhoneNumber(text);
-  setFormData({...formData, telephone: formatted});
-};
+}, [formData]);
 
-  useEffect(() => {
-    let totalToiture = formData.dimensions.reduce((sum, section) => {
-      const length = parseFloat(section.length) || 0;
-      const width = parseFloat(section.width) || 0;
-      return sum + (length * width);
-    }, 0);
+  // 🚀 SOLUTION PARFAITE: react-native-share pour Expo Dev Build
+// Remplacez TOUTE votre fonction shareWithRNShare() par celle-ci :
 
-    let totalParapets = formData.parapets.reduce((sum, parapet) => {
-      const lengthInFeet = parseFloat(parapet.length) || 0;
-      const widthInInches = parseFloat(parapet.width) || 0;
-      return sum + (lengthInFeet * (widthInInches / 12));
-    }, 0);
-
-    setSuperficie({
-      toiture: totalToiture,
-      parapets: totalParapets,
-      totale: Math.max(0, (totalToiture + totalParapets))
-    });
-  }, [formData]);
-
-// 🚀 SOLUTION PARFAITE: react-native-share pour Expo Dev Build
 const shareWithRNShare = async () => {
   try {
     const report = generateEvernoteReport();
-    const subject = `SOUMISSION - ${formData.nom || 'Client'} - ${formData.adresse || 'Projet'}`;
+    const subject = formData.adresse || 'Soumission Toiture';
     
     if (photos.length === 0) {
       await RNShare.open({
@@ -116,10 +127,11 @@ const shareWithRNShare = async () => {
       return;
     }
 
- 
-  // Créer un fichier texte avec le rapport complet
+    // 🔧 CORRECTION : Déclarer reportPath localement
     const reportFileName = `rapport_${(formData.nom || 'client').replace(/[^a-zA-Z0-9]/g, '_')}.txt`;
     const reportPath = `${FileSystem.documentDirectory}${reportFileName}`;
+    
+    // Créer le fichier rapport
     await FileSystem.writeAsStringAsync(reportPath, report);
 
     // Préparer toutes les URLs pour react-native-share
@@ -134,31 +146,29 @@ const shareWithRNShare = async () => {
       showAppsToView: true,
     });
 
-    // Nettoyer
+    // Nettoyer le fichier temporaire
     setTimeout(async () => {
       try {
         await FileSystem.deleteAsync(reportPath, { idempotent: true });
       } catch (error) {
-        console.log('Nettoyage:', error);
+        console.log('Nettoyage fichier:', error);
       }
     }, 5000);
 
     showNotification(`Rapport et ${photos.length} photo${photos.length > 1 ? 's' : ''} partagés !`, 'success');
 
-} catch (error) {
-  // 🎯 GÉRER L'ANNULATION UTILISATEUR
-  if (error.message === 'User did not share') {
-    // L'utilisateur a annulé - c'est normal, pas d'erreur
-    console.log('Utilisateur a annulé le partage');
-    return;
+  } catch (error) {
+    // 🎯 GÉRER L'ANNULATION UTILISATEUR
+    if (error.message === 'User did not share') {
+      console.log('Utilisateur a annulé le partage');
+      return;
+    }
+    
+    // Vraie erreur
+    console.error('Erreur react-native-share:', error);
+    showNotification('Erreur lors du partage', 'error');
   }
-  
-  // Vraie erreur
-  console.error('Erreur react-native-share:', error);
-  showNotification('Erreur lors du partage', 'error');
-}
 };
-
 
   // Fonction pour générer le rapport Evernote formaté
   const generateEvernoteReport = () => {
@@ -173,7 +183,7 @@ const shareWithRNShare = async () => {
                            formData.nbDrains + formData.trepiedElectrique;
 
     const report = `
-SOUMISSION TOITURE - ${formData.adresse || 'Projet'}
+${formData.adresse || 'Projet'}
 ===============================================
 Date: ${currentDate} à ${currentTime}
 Adresse: ${formData.adresse || 'Non spécifiée'}
@@ -235,33 +245,100 @@ ${currentDate} ${currentTime}
     return report;
   };
 
- 
-// Fonction mise à jour pour le choix d'export AVEC PHOTOS
-const handleEvernoteExport = () => {
+const handleEnregistrerComplet = async () => {
   if (!formData.adresse.trim()) {
-    showNotification('Adresse du projet requise pour export', 'error');
+    showNotification('Adresse du projet requise', 'error');
     return;
   }
 
   const hasPhotos = photos.length > 0;
   
   Alert.alert(
-    'Exporter vers Evernote',
+    'Enregistrer la soumission',
     hasPhotos 
-      ? `Exporter la soumission avec ${photos.length} photo${photos.length > 1 ? 's' : ''} ?`
-      : 'Exporter la soumission (aucune photo) ?',
+      ? `Enregistrer et partager la soumission avec ${photos.length} photo${photos.length > 1 ? 's' : ''} ?`
+      : 'Enregistrer et partager la soumission (aucune photo) ?',
     [
       {
         text: 'Annuler',
         style: 'cancel'
       },
       {
-        text: 'Partage natif TOUT',
-        onPress: shareWithRNShare,
+        text: 'Enregistrer',
+        onPress: async () => {
+          await processCompleteSubmission();
+        },
         style: 'default'
       }
     ]
   );
+};
+
+const processCompleteSubmission = async () => {
+  try {
+    showNotification('💾 Enregistrement en cours...', 'success');
+
+    const soumission = {
+      date: date.toISOString().split('T')[0],
+      client: {
+        nom: formData.nom,
+        adresse: formData.adresse,
+        telephone: formData.telephone,
+        courriel: formData.courriel
+      },
+      toiture: {
+        superficie: superficie,
+        plusieursEpaisseurs: formData.plusieursEpaisseurs,
+        dimensions: formData.dimensions,
+        parapets: formData.parapets,
+        puitsLumiere: formData.puitsLumiere
+      },
+      materiaux: {
+        nbFeuilles: formData.nbFeuilles,
+        nbMax: formData.nbMax,
+        nbEvents: formData.nbEvents,
+        nbDrains: formData.nbDrains,
+        trepiedElectrique: formData.trepiedElectrique,
+      },
+      options: {
+        hydroQuebec: formData.hydroQuebec,
+        grue: formData.grue,
+        trackfall: formData.trackfall
+      },
+      notes: formData.notes,
+      photos: photos.map(photo => ({
+        id: photo.id,
+        uri: photo.uri,
+        timestamp: Date.now()
+      })),
+      photoCount: photos.length,
+      processed: true,
+      exported: true,
+      exportedAt: new Date().toISOString()
+    };
+
+    const firebaseResult = await saveSubmissionToFirebase(soumission);
+    
+    if (firebaseResult.success) {
+      showNotification('✅ Sauvegardé dans le cloud !', 'success');
+    } else {
+      showNotification('⚠️ Sauvegarde locale (cloud indisponible)', 'success');
+    }
+
+    showNotification('📤 Préparation du partage...', 'success');
+    
+    setTimeout(async () => {
+      await shareWithRNShare();
+      
+      setTimeout(() => {
+        showNotification('🎉 Soumission complétée avec succès !', 'success');
+      }, 1000);
+    }, 500);
+
+  } catch (error) {
+    console.error('Erreur lors de l\'enregistrement complet:', error);
+    showNotification('❌ Erreur lors de l\'enregistrement', 'error');
+  }
 };
 
   const generatePickerItems = (start, end) => {
@@ -285,8 +362,6 @@ const handleEvernoteExport = () => {
       nbEvents: 0,
       nbDrains: 0,
       trepiedElectrique: 0,
-      ff180: 0,
-      armorbound180: 0,
       plusieursEpaisseurs: false,
       hydroQuebec: false,
       grue: false,
@@ -318,57 +393,24 @@ const handleEvernoteExport = () => {
     setFormData({...formData, puitsLumiere: newPuits});
   };
 
- const enregistrerSoumission = () => {
-  if (!formData.adresse.trim()) {
-    showNotification('Adresse des travaux obligatoire', 'error');
-    return;
-  }
 
-     const soumission = {
-    date: date.toISOString().split('T')[0],
-    client: {
-      nom: formData.nom,
-      adresse: formData.adresse,
-      telephone: formData.telephone,
-      courriel: formData.courriel
-    },
-    toiture: {
-      superficie: superficie,
-      plusieursEpaisseurs: formData.plusieursEpaisseurs
-    },
-    materiaux: {
-      nbFeuilles: formData.nbFeuilles,
-      nbMax: formData.nbMax,
-      nbEvents: formData.nbEvents,
-      nbDrains: formData.nbDrains,
-      trepiedElectrique: formData.trepiedElectrique,
-      ff180: formData.ff180,
-      armorbound180: formData.armorbound180
-    },
-    options: {
-      hydroQuebec: formData.hydroQuebec,
-      grue: formData.grue,
-      trackfall: formData.trackfall
-    },
-    notes: formData.notes,
-    photos: photos.map(photo => photo.uri)
-  };
-
-    Alert.alert(
-    'Soumission enregistrée',
-    `Projet: ${formData.adresse}\nSuperficie: ${superficie.totale.toFixed(2)} pieds²`,
-    [{ text: 'OK' }]
-  );
-  showNotification('Soumission enregistrée avec succès', 'success');
-};
 
   const showNotification = (message, type) => {
     setNotification({ visible: true, message, type });
     setTimeout(() => setNotification({ ...notification, visible: false }), 3000);
   };
 
+  // 🎯 NOUVELLE FONCTION ACCORDÉON MULTI-SECTIONS
   const toggleSection = (section) => {
-    setActiveSection(activeSection === section ? null : section);
+    setOpenSections(prevOpenSections => {
+      if (prevOpenSections.includes(section)) {
+        // Section déjà ouverte -> la fermer
+        return prevOpenSections.filter(openSection => openSection !== section);
+      } else {
+        // Section fermée -> l'ajouter aux sections ouvertes
+        return [...prevOpenSections, section];
+      }
+    });
   };
 
   const handleDimensionChange = (sectionIndex, field, value) => {
@@ -469,382 +511,190 @@ const handleEvernoteExport = () => {
       </View>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-         <ScrollView 
-    style={styles.scrollContainer}
-    keyboardShouldPersistTaps="handled"
-    contentContainerStyle={{ paddingBottom: 100 }}
-         >
-        {/* Section Informations client */}
-        <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('client')}>
-          <FontAwesome5 name="user" size={20} color="white" />
-          <Text style={styles.sectionTitle}>Informations client</Text>
-          <FontAwesome5 name={activeSection === 'client' ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-        </TouchableOpacity>
-        
-       {activeSection === 'client' && (
-  <View style={[styles.sectionContent, styles.nonPickerSection]}>
-    <Text style={styles.label}>Nom du client</Text>
-    <TextInput
-      style={styles.input}
-      value={formData.nom}
-      onChangeText={text => setFormData({...formData, nom: text})}
-      placeholder="Nom complet"
-    />
-    
-    <Text style={styles.label}>Adresse des travaux *</Text>
-    <TextInput
-      style={[styles.input, styles.requiredInput]}
-      value={formData.adresse}
-      onChangeText={text => setFormData({...formData, adresse: text})}
-      placeholder="Adresse complète"
-    />
-    
-    <View style={styles.grid}>
-      <View style={styles.gridItem}>
-        <Text style={styles.label}>Téléphone</Text>
-        <TextInput
-          style={styles.input}
-          value={formData.telephone}
-          onChangeText={handlePhoneChange}
-          placeholder="514-783-2794"
-          keyboardType="phone-pad"
-          maxLength={12} // 3-3-4 + 2 tirets
-        />
-      </View>
-      <View style={styles.gridItem}>
-        <Text style={styles.label}>Courriel</Text>
-        <TextInput
-          style={styles.input}
-          value={formData.courriel}
-          onChangeText={text => setFormData({...formData, courriel: text})}
-          placeholder="email@exemple.com"
-          keyboardType="email-address"
-        />
-      </View>
-    </View>
-  </View>
-)}
-
-        {/* Section Dimensions de la toiture */}
-        <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('dimensions')}>
-          <FontAwesome5 name="ruler-combined" size={20} color="white" />
-          <Text style={styles.sectionTitle}>Dimensions de la toiture</Text>
-          <FontAwesome5 name={activeSection === 'dimensions' ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-        </TouchableOpacity>
-        
-        {activeSection === 'dimensions' && (
-          <View style={[styles.sectionContent, styles.pickerSection]}>
-            {formData.dimensions.map((section, index) => (
-              <View key={`dim-section-${index}`} style={styles.dimSetContainer}>
-                <View style={styles.sectionHeaderRow}>
+        <ScrollView 
+          style={styles.scrollContainer}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ paddingBottom: 100 }}
+        >
+          {/* Section Informations client */}
+          <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('client')}>
+            <FontAwesome5 name="user" size={20} color="white" />
+            <Text style={styles.sectionTitle}>Informations client</Text>
+            <FontAwesome5 name={openSections.includes('client') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
+          </TouchableOpacity>
+          
+          {openSections.includes('client') && (
+            <View style={[styles.sectionContent, styles.nonPickerSection]}>
+              <Text style={styles.label}>Nom du client</Text>
+              <TextInput
+                style={styles.input}
+                value={formData.nom}
+                onChangeText={text => setFormData({...formData, nom: text})}
+                placeholder="Nom complet"
+              />
+              
+              <Text style={styles.label}>Adresse des travaux *</Text>
+              <TextInput
+                style={[styles.input, styles.requiredInput]}
+                value={formData.adresse}
+                onChangeText={text => setFormData({...formData, adresse: text})}
+                placeholder="Adresse complète"
+              />
+              
+              <View style={styles.grid}>
+                <View style={styles.gridItem}>
+                  <Text style={styles.label}>Téléphone</Text>
                   <TextInput
-                    style={styles.sectionNameInput}
-                    value={section.name || `Section ${index + 1}`}
-                    onChangeText={(text) => handleSectionNameChange(index, text)}
-                    placeholder="Ex: Hangar"
+                    style={styles.input}
+                    value={formData.telephone}
+                    onChangeText={handlePhoneChange}
+                    placeholder="514-783-2794"
+                    keyboardType="phone-pad"
+                    maxLength={12}
                   />
                 </View>
-                
-                <View style={styles.dimRow}>
-                  <View style={styles.pickerContainer}>
-                    <Text style={styles.pickerLabel}>Longueur (pieds)</Text>
-                    <TouchableOpacity 
-                      style={styles.pickerTouchable}
-                      onPress={() => openPicker(`length-${index}`)}
-                    >
-                      <Text style={styles.pickerValueText}>{section.length || "0"}</Text>
-                      <RNPickerSelect
-                        ref={el => pickerRefs.current[`length-${index}`] = el}
-                        onValueChange={(value) => handleDimensionChange(index, 'length', value)}
-                        items={generatePickerItems(0, 200)}
-                        value={section.length}
-                        style={pickerSelectStyles}
-                        placeholder={{}}
-                        useNativeAndroidPickerStyle={false}
-                      />
-                    </TouchableOpacity>
-                  </View>
-                  
-                  <Text style={styles.multiply}>×</Text>
-                  
-                  <View style={styles.pickerContainer}>
-                    <Text style={styles.pickerLabel}>Largeur (pieds)</Text>
-                    <TouchableOpacity 
-                      style={styles.pickerTouchable}
-                      onPress={() => openPicker(`width-${index}`)}
-                    >
-                      <Text style={styles.pickerValueText}>{section.width || "0"}</Text>
-                      <RNPickerSelect
-                        ref={el => pickerRefs.current[`width-${index}`] = el}
-                        onValueChange={(value) => handleDimensionChange(index, 'width', value)}
-                        items={generatePickerItems(0, 200)}
-                        value={section.width}
-                        style={pickerSelectStyles}
-                        placeholder={{}}
-                        useNativeAndroidPickerStyle={false}
-                      />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                
-                {index > 0 && (
-                  <TouchableOpacity
-                    style={styles.removeSectionButton}
-                    onPress={() => removeDimensionSection(index)}
-                  >
-                    <Text style={{color: '#e74c3c', fontSize: 14}}>❌</Text>
-                    <Text style={styles.removeSectionButtonText}>Supprimer cette section</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            ))}
-
-            <View style={styles.addSectionButtonContainer}>
-              <TouchableOpacity style={styles.addSectionButton} onPress={addDimensionSection}>
-                <Text style={{color: '#3498db', fontSize: 16}}>➕</Text>
-                <Text style={styles.addSectionButtonText}>Ajouter une section</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.totalSurfaceContainer}>
-              <Text style={styles.totalSurfaceLabel}>Superficie totale (toiture + parapets):</Text>
-              <Text style={styles.totalSurfaceValue}>{superficie.totale.toFixed(2)} pi²</Text>
-            </View>
-          </View>
-        )}
-
-        {/* Section Dimensions des parapets */}
-        <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('parapets')}>
-          <FontAwesome5 name="ruler-vertical" size={20} color="white" />
-          <Text style={styles.sectionTitle}>Dimensions des parapets</Text>
-          <FontAwesome5 name={activeSection === 'parapets' ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-        </TouchableOpacity>
-        
-        {activeSection === 'parapets' && (
-          <View style={[styles.sectionContent, styles.pickerSection]}>
-            {formData.parapets.map((parapet, index) => (
-              <View key={`parapet-${index}`} style={styles.dimSetContainer}>
-                <View style={styles.sectionHeaderRow}>
+                <View style={styles.gridItem}>
+                  <Text style={styles.label}>Courriel</Text>
                   <TextInput
-                    style={styles.sectionNameInput}
-                    value={parapet.name || `Parapet ${index + 1}`}
-                    onChangeText={(text) => {
-                      const newParapets = [...formData.parapets];
-                      newParapets[index].name = text;
-                      setFormData({...formData, parapets: newParapets});
-                    }}
-                    placeholder="Ex: Parapet nord"
+                    style={styles.input}
+                    value={formData.courriel}
+                    onChangeText={text => setFormData({...formData, courriel: text})}
+                    placeholder="email@exemple.com"
+                    keyboardType="email-address"
                   />
                 </View>
-
-                <View style={styles.dimRow}>
-                  <View style={styles.pickerContainer}>
-                    <Text style={styles.pickerLabel}>Longueur (pieds)</Text>
-                    <TouchableOpacity 
-                      style={styles.pickerTouchable}
-                      onPress={() => openPicker(`parapet-length-${index}`)}
-                    >
-                      <Text style={styles.pickerValueText}>{parapet.length || "0"}</Text>
-                      <RNPickerSelect
-                        ref={el => pickerRefs.current[`parapet-length-${index}`] = el}
-                        onValueChange={(value) => {
-                          const newParapets = [...formData.parapets];
-                          newParapets[index].length = value;
-                          setFormData({...formData, parapets: newParapets});
-                        }}
-                        items={generatePickerItems(0, 200)}
-                        value={parapet.length}
-                        style={pickerSelectStyles}
-                      />
-                    </TouchableOpacity>
-                  </View>
-
-                  <Text style={styles.multiply}>×</Text>
-
-                  <View style={styles.pickerContainer}>
-                    <Text style={styles.pickerLabel}>Largeur (pouces)</Text>
-                    <TouchableOpacity 
-                      style={styles.pickerTouchable}
-                      onPress={() => openPicker(`parapet-width-${index}`)}
-                    >
-                      <Text style={styles.pickerValueText}>{parapet.width || "0"}</Text>
-                      <RNPickerSelect
-                        ref={el => pickerRefs.current[`parapet-width-${index}`] = el}
-                        onValueChange={(value) => {
-                          const newParapets = [...formData.parapets];
-                          newParapets[index].width = value;
-                          setFormData({...formData, parapets: newParapets});
-                        }}
-                        items={generatePickerItems(0, 200)}
-                        value={parapet.width}
-                        style={pickerSelectStyles}
-                      />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {index > 0 && (
-                  <TouchableOpacity
-                    style={styles.removeSectionButton}
-                    onPress={() => removeParapetSection(index)}
-                  >
-                    <Text style={{color: '#e74c3c', fontSize: 14}}>❌</Text>
-                    <Text style={styles.removeSectionButtonText}>Supprimer ce parapet</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            ))}
-
-            <View style={styles.addSectionButtonContainer}>
-              <TouchableOpacity style={styles.addSectionButton} onPress={addParapetSection}>
-                <Text style={{color: '#3498db', fontSize: 16}}>➕</Text>
-                <Text style={styles.addSectionButtonText}>Ajouter un parapet</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.totalSurfaceContainer}>
-              <Text style={styles.totalSurfaceLabel}>Superficie des parapets:</Text>
-              <Text style={styles.totalSurfaceValue}>{superficie.parapets.toFixed(2)} pi²</Text>
-            </View>
-          </View>
-        )}
-
-        {/* Section Matériaux et accessoires */}
-        <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('materiaux')}>
-          <FontAwesome5 name="tools" size={20} color="white" />
-          <Text style={styles.sectionTitle}>Matériaux et accessoires</Text>
-          <FontAwesome5 name={activeSection === 'materiaux' ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-        </TouchableOpacity>
-        
-        {activeSection === 'materiaux' && (
-          <View style={[styles.sectionContent, styles.pickerSection]}>
-            <View style={styles.materiauxGrid}>
-              <View style={styles.materiauxItem}>
-                <Text style={styles.label}>Feuilles de tôles</Text>
-                <TouchableOpacity 
-                  style={styles.pickerTouchable}
-                  onPress={() => openPicker('nbFeuilles')}
-                >
-                  <Text style={styles.pickerValueText}>{formData.nbFeuilles || "0"}</Text>
-                  <RNPickerSelect
-                    ref={el => pickerRefs.current['nbFeuilles'] = el}
-                    onValueChange={(value) => setFormData({...formData, nbFeuilles: value})}
-                    items={generatePickerItems(0, 200)}
-                    value={formData.nbFeuilles}
-                    style={pickerSelectStyles}
-                    placeholder={{}}
-                    useNativeAndroidPickerStyle={false}
-                  />
-                </TouchableOpacity>
-              </View>
-              
-              <View style={styles.materiauxItem}>
-                <Text style={styles.label}>Maximum</Text>
-                <TouchableOpacity 
-                  style={styles.pickerTouchable}
-                  onPress={() => openPicker('nbMax')}
-                >
-                  <Text style={styles.pickerValueText}>{formData.nbMax || "0"}</Text>
-                  <RNPickerSelect
-                    ref={el => pickerRefs.current['nbMax'] = el}
-                    onValueChange={(value) => setFormData({...formData, nbMax: value})}
-                    items={generatePickerItems(0, 200)}
-                    value={formData.nbMax}
-                    style={pickerSelectStyles}
-                    placeholder={{}}
-                    useNativeAndroidPickerStyle={false}
-                  />
-                </TouchableOpacity>
-              </View>
-              
-              <View style={styles.materiauxItem}>
-                <Text style={styles.label}>Évents</Text>
-                <TouchableOpacity 
-                  style={styles.pickerTouchable}
-                  onPress={() => openPicker('nbEvents')}
-                >
-                  <Text style={styles.pickerValueText}>{formData.nbEvents || "0"}</Text>
-                  <RNPickerSelect
-                    ref={el => pickerRefs.current['nbEvents'] = el}
-                    onValueChange={(value) => setFormData({...formData, nbEvents: value})}
-                    items={generatePickerItems(0, 200)}
-                    value={formData.nbEvents}
-                    style={pickerSelectStyles}
-                    placeholder={{}}
-                    useNativeAndroidPickerStyle={false}
-                  />
-                </TouchableOpacity>
-              </View>
-              
-              <View style={styles.materiauxItem}>
-                <Text style={styles.label}>Drains</Text>
-                <TouchableOpacity 
-                  style={styles.pickerTouchable}
-                  onPress={() => openPicker('nbDrains')}
-                >
-                  <Text style={styles.pickerValueText}>{formData.nbDrains || "0"}</Text>
-                  <RNPickerSelect
-                    ref={el => pickerRefs.current['nbDrains'] = el}
-                    onValueChange={(value) => setFormData({...formData, nbDrains: value})}
-                    items={generatePickerItems(0, 200)}
-                    value={formData.nbDrains}
-                    style={pickerSelectStyles}
-                    placeholder={{}}
-                    useNativeAndroidPickerStyle={false}
-                  />
-                </TouchableOpacity>
-              </View>
-              
-              <View style={styles.materiauxItem}>
-                <Text style={styles.label}>Trépied électrique</Text>
-                <TouchableOpacity 
-                  style={styles.pickerTouchable}
-                  onPress={() => openPicker('trepiedElectrique')}
-                >
-                  <Text style={styles.pickerValueText}>{formData.trepiedElectrique || "0"}</Text>
-                  <RNPickerSelect
-                    ref={el => pickerRefs.current['trepiedElectrique'] = el}
-                    onValueChange={(value) => setFormData({...formData, trepiedElectrique: value})}
-                    items={generatePickerItems(0, 200)}
-                    value={formData.trepiedElectrique}
-                    style={pickerSelectStyles}
-                    placeholder={{}}
-                    useNativeAndroidPickerStyle={false}
-                  />
-                </TouchableOpacity>
               </View>
             </View>
+          )}
 
-            {/* Section Puits de lumière */}
-            <View style={styles.dimSectionContainer}>
-              <Text style={styles.subSectionHeader}>Puits de lumière (en pouces)</Text>
-              
-              {formData.puitsLumiere.map((puit, index) => (
-                <View key={`puit-${index}`} style={[styles.dimSetContainer, { marginBottom: 10 }]}>
+          {/* Section Dimensions de la toiture */}
+          <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('dimensions')}>
+            <FontAwesome5 name="ruler-combined" size={20} color="white" />
+            <Text style={styles.sectionTitle}>Dimensions de la toiture</Text>
+            <FontAwesome5 name={openSections.includes('dimensions') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
+          </TouchableOpacity>
+          
+          {openSections.includes('dimensions') && (
+            <View style={[styles.sectionContent, styles.pickerSection]}>
+              {formData.dimensions.map((section, index) => (
+                <View key={`dim-section-${index}`} style={styles.dimSetContainer}>
                   <View style={styles.sectionHeaderRow}>
                     <TextInput
                       style={styles.sectionNameInput}
-                      value={puit.name}
+                      value={section.name || `Section ${index + 1}`}
+                      onChangeText={(text) => handleSectionNameChange(index, text)}
+                      placeholder="Ex: Hangar"
+                    />
+                  </View>
+                  
+                  <View style={styles.dimRow}>
+                    <View style={styles.pickerContainer}>
+                      <Text style={styles.pickerLabel}>Longueur (pieds)</Text>
+                      <TouchableOpacity 
+                        style={styles.pickerTouchable}
+                        onPress={() => openPicker(`length-${index}`)}
+                      >
+                        <Text style={styles.pickerValueText}>{section.length || "0"}</Text>
+                        <RNPickerSelect
+                          ref={el => pickerRefs.current[`length-${index}`] = el}
+                          onValueChange={(value) => handleDimensionChange(index, 'length', value)}
+                          items={generatePickerItems(0, 200)}
+                          value={section.length}
+                          style={pickerSelectStyles}
+                          placeholder={{}}
+                          useNativeAndroidPickerStyle={false}
+                        />
+                      </TouchableOpacity>
+                    </View>
+                    
+                    <Text style={styles.multiply}>×</Text>
+                    
+                    <View style={styles.pickerContainer}>
+                      <Text style={styles.pickerLabel}>Largeur (pieds)</Text>
+                      <TouchableOpacity 
+                        style={styles.pickerTouchable}
+                        onPress={() => openPicker(`width-${index}`)}
+                      >
+                        <Text style={styles.pickerValueText}>{section.width || "0"}</Text>
+                        <RNPickerSelect
+                          ref={el => pickerRefs.current[`width-${index}`] = el}
+                          onValueChange={(value) => handleDimensionChange(index, 'width', value)}
+                          items={generatePickerItems(0, 200)}
+                          value={section.width}
+                          style={pickerSelectStyles}
+                          placeholder={{}}
+                          useNativeAndroidPickerStyle={false}
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                  
+                  {index > 0 && (
+                    <TouchableOpacity
+                      style={styles.removeSectionButton}
+                      onPress={() => removeDimensionSection(index)}
+                    >
+                      <Text style={styles.deleteX}>✕</Text>
+                      <Text style={styles.removeSectionButtonText}>Supprimer cette section</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+
+              <View style={styles.addSectionButtonContainer}>
+                <TouchableOpacity style={styles.addSectionButton} onPress={addDimensionSection}>
+                  <Text style={{color: '#3498db', fontSize: 16}}>➕</Text>
+                  <Text style={styles.addSectionButtonText}>Ajouter une section</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.totalSurfaceContainer}>
+                <Text style={styles.totalSurfaceLabel}>Superficie totale (toiture + parapets):</Text>
+                <Text style={styles.totalSurfaceValue}>{superficie.totale.toFixed(2)} pi²</Text>
+              </View>
+            </View>
+          )}
+
+          {/* Section Dimensions des parapets */}
+          <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('parapets')}>
+            <FontAwesome5 name="ruler-vertical" size={20} color="white" />
+            <Text style={styles.sectionTitle}>Dimensions des parapets</Text>
+            <FontAwesome5 name={openSections.includes('parapets') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
+          </TouchableOpacity>
+          
+          {openSections.includes('parapets') && (
+            <View style={[styles.sectionContent, styles.pickerSection]}>
+              {formData.parapets.map((parapet, index) => (
+                <View key={`parapet-${index}`} style={styles.dimSetContainer}>
+                  <View style={styles.sectionHeaderRow}>
+                    <TextInput
+                      style={styles.sectionNameInput}
+                      value={parapet.name || `Parapet ${index + 1}`}
                       onChangeText={(text) => {
-                        const newPuits = [...formData.puitsLumiere];
-                        newPuits[index].name = text;
-                        setFormData({...formData, puitsLumiere: newPuits});
+                        const newParapets = [...formData.parapets];
+                        newParapets[index].name = text;
+                        setFormData({...formData, parapets: newParapets});
                       }}
-                      placeholder={`Puit ${index + 1}`}
+                      placeholder="Ex: Parapet nord"
                     />
                   </View>
 
                   <View style={styles.dimRow}>
                     <View style={styles.pickerContainer}>
-                      <Text style={styles.pickerLabel}>Longueur (pouces)</Text>
+                      <Text style={styles.pickerLabel}>Longueur (pieds)</Text>
                       <TouchableOpacity 
-                        style={[styles.pickerTouchable, { height: 45 }]}
-                        onPress={() => openPicker(`puit-length-${index}`)}
+                        style={styles.pickerTouchable}
+                        onPress={() => openPicker(`parapet-length-${index}`)}
                       >
-                        <Text style={styles.pickerValueText}>{puit.length || "0"}</Text>
+                        <Text style={styles.pickerValueText}>{parapet.length || "0"}</Text>
                         <RNPickerSelect
-                          ref={el => pickerRefs.current[`puit-length-${index}`] = el}
-                          onValueChange={(value) => handlePuitLumiereChange(index, 'length', value)}
+                          ref={el => pickerRefs.current[`parapet-length-${index}`] = el}
+                          onValueChange={(value) => {
+                            const newParapets = [...formData.parapets];
+                            newParapets[index].length = value;
+                            setFormData({...formData, parapets: newParapets});
+                          }}
                           items={generatePickerItems(0, 200)}
-                          value={puit.length}
+                          value={parapet.length}
                           style={pickerSelectStyles}
                         />
                       </TouchableOpacity>
@@ -855,15 +705,19 @@ const handleEvernoteExport = () => {
                     <View style={styles.pickerContainer}>
                       <Text style={styles.pickerLabel}>Largeur (pouces)</Text>
                       <TouchableOpacity 
-                        style={[styles.pickerTouchable, { height: 45 }]}
-                        onPress={() => openPicker(`puit-width-${index}`)}
+                        style={styles.pickerTouchable}
+                        onPress={() => openPicker(`parapet-width-${index}`)}
                       >
-                        <Text style={styles.pickerValueText}>{puit.width || "0"}</Text>
+                        <Text style={styles.pickerValueText}>{parapet.width || "0"}</Text>
                         <RNPickerSelect
-                          ref={el => pickerRefs.current[`puit-width-${index}`] = el}
-                          onValueChange={(value) => handlePuitLumiereChange(index, 'width', value)}
+                          ref={el => pickerRefs.current[`parapet-width-${index}`] = el}
+                          onValueChange={(value) => {
+                            const newParapets = [...formData.parapets];
+                            newParapets[index].width = value;
+                            setFormData({...formData, parapets: newParapets});
+                          }}
                           items={generatePickerItems(0, 200)}
-                          value={puit.width}
+                          value={parapet.width}
                           style={pickerSelectStyles}
                         />
                       </TouchableOpacity>
@@ -873,166 +727,345 @@ const handleEvernoteExport = () => {
                   {index > 0 && (
                     <TouchableOpacity
                       style={styles.removeSectionButton}
-                      onPress={() => removePuitLumiere(index)}
+                      onPress={() => removeParapetSection(index)}
                     >
-                      <Text style={{color: '#e74c3c', fontSize: 14}}>❌</Text>
-                      <Text style={styles.removeSectionButtonText}>Supprimer ce puit</Text>
+                      <Text style={styles.deleteX}>✕</Text>
+                      <Text style={styles.removeSectionButtonText}>Supprimer ce parapet</Text>
                     </TouchableOpacity>
                   )}
                 </View>
               ))}
 
-              <View style={[styles.addSectionButtonContainer, { marginTop: 5 }]}>
-                <TouchableOpacity
-                  style={[styles.addSectionButton, { paddingVertical: 10 }]}
-                  onPress={addPuitLumiere}
-                >
+              <View style={styles.addSectionButtonContainer}>
+                <TouchableOpacity style={styles.addSectionButton} onPress={addParapetSection}>
                   <Text style={{color: '#3498db', fontSize: 16}}>➕</Text>
-                  <Text style={styles.addSectionButtonText}>Ajouter un puit de lumière</Text>
+                  <Text style={styles.addSectionButtonText}>Ajouter un parapet</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.totalSurfaceContainer}>
+                <Text style={styles.totalSurfaceLabel}>Superficie des parapets:</Text>
+                <Text style={styles.totalSurfaceValue}>{superficie.parapets.toFixed(2)} pi²</Text>
+              </View>
+            </View>
+          )}
+
+          {/* Section Matériaux et accessoires */}
+          <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('materiaux')}>
+            <FontAwesome5 name="tools" size={20} color="white" />
+            <Text style={styles.sectionTitle}>Matériaux et accessoires</Text>
+            <FontAwesome5 name={openSections.includes('materiaux') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
+          </TouchableOpacity>
+          
+          {openSections.includes('materiaux') && (
+            <View style={[styles.sectionContent, styles.pickerSection]}>
+              <View style={styles.materiauxGrid}>
+                <View style={styles.materiauxItem}>
+                  <Text style={styles.label}>Feuilles de tôles</Text>
+                  <TouchableOpacity 
+                    style={styles.pickerTouchable}
+                    onPress={() => openPicker('nbFeuilles')}
+                  >
+                    <Text style={styles.pickerValueText}>{formData.nbFeuilles || "0"}</Text>
+                    <RNPickerSelect
+                      ref={el => pickerRefs.current['nbFeuilles'] = el}
+                      onValueChange={(value) => setFormData({...formData, nbFeuilles: value})}
+                      items={generatePickerItems(0, 200)}
+                      value={formData.nbFeuilles}
+                      style={pickerSelectStyles}
+                      placeholder={{}}
+                      useNativeAndroidPickerStyle={false}
+                    />
+                  </TouchableOpacity>
+                </View>
+                
+                <View style={styles.materiauxItem}>
+                  <Text style={styles.label}>Maximum</Text>
+                  <TouchableOpacity 
+                    style={styles.pickerTouchable}
+                    onPress={() => openPicker('nbMax')}
+                  >
+                    <Text style={styles.pickerValueText}>{formData.nbMax || "0"}</Text>
+                    <RNPickerSelect
+                      ref={el => pickerRefs.current['nbMax'] = el}
+                      onValueChange={(value) => setFormData({...formData, nbMax: value})}
+                      items={generatePickerItems(0, 200)}
+                      value={formData.nbMax}
+                      style={pickerSelectStyles}
+                      placeholder={{}}
+                      useNativeAndroidPickerStyle={false}
+                    />
+                  </TouchableOpacity>
+                </View>
+                
+                <View style={styles.materiauxItem}>
+                  <Text style={styles.label}>Évents</Text>
+                  <TouchableOpacity 
+                    style={styles.pickerTouchable}
+                    onPress={() => openPicker('nbEvents')}
+                  >
+                    <Text style={styles.pickerValueText}>{formData.nbEvents || "0"}</Text>
+                    <RNPickerSelect
+                      ref={el => pickerRefs.current['nbEvents'] = el}
+                      onValueChange={(value) => setFormData({...formData, nbEvents: value})}
+                      items={generatePickerItems(0, 200)}
+                      value={formData.nbEvents}
+                      style={pickerSelectStyles}
+                      placeholder={{}}
+                      useNativeAndroidPickerStyle={false}
+                    />
+                  </TouchableOpacity>
+                </View>
+                
+                <View style={styles.materiauxItem}>
+                  <Text style={styles.label}>Drains</Text>
+                  <TouchableOpacity 
+                    style={styles.pickerTouchable}
+                    onPress={() => openPicker('nbDrains')}
+                  >
+                    <Text style={styles.pickerValueText}>{formData.nbDrains || "0"}</Text>
+                    <RNPickerSelect
+                      ref={el => pickerRefs.current['nbDrains'] = el}
+                      onValueChange={(value) => setFormData({...formData, nbDrains: value})}
+                      items={generatePickerItems(0, 200)}
+                      value={formData.nbDrains}
+                      style={pickerSelectStyles}
+                      placeholder={{}}
+                      useNativeAndroidPickerStyle={false}
+                    />
+                  </TouchableOpacity>
+                </View>
+                
+                <View style={styles.materiauxItem}>
+                  <Text style={styles.label}>Trépied électrique</Text>
+                  <TouchableOpacity 
+                    style={styles.pickerTouchable}
+                    onPress={() => openPicker('trepiedElectrique')}
+                  >
+                    <Text style={styles.pickerValueText}>{formData.trepiedElectrique || "0"}</Text>
+                    <RNPickerSelect
+                      ref={el => pickerRefs.current['trepiedElectrique'] = el}
+                      onValueChange={(value) => setFormData({...formData, trepiedElectrique: value})}
+                      items={generatePickerItems(0, 200)}
+                      value={formData.trepiedElectrique}
+                      style={pickerSelectStyles}
+                      placeholder={{}}
+                      useNativeAndroidPickerStyle={false}
+                    />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Section Puits de lumière */}
+              <View style={styles.dimSectionContainer}>
+                <Text style={styles.subSectionHeader}>Puits de lumière (en pouces)</Text>
+                
+                {formData.puitsLumiere.map((puit, index) => (
+                  <View key={`puit-${index}`} style={[styles.dimSetContainer, { marginBottom: 10 }]}>
+                    <View style={styles.sectionHeaderRow}>
+                      <TextInput
+                        style={styles.sectionNameInput}
+                        value={puit.name}
+                        onChangeText={(text) => {
+                          const newPuits = [...formData.puitsLumiere];
+                          newPuits[index].name = text;
+                          setFormData({...formData, puitsLumiere: newPuits});
+                        }}
+                        placeholder={`Puit ${index + 1}`}
+                      />
+                    </View>
+
+                    <View style={styles.dimRow}>
+                      <View style={styles.pickerContainer}>
+                        <Text style={styles.pickerLabel}>Longueur (pouces)</Text>
+                        <TouchableOpacity 
+                          style={[styles.pickerTouchable, { height: 45 }]}
+                          onPress={() => openPicker(`puit-length-${index}`)}
+                        >
+                          <Text style={styles.pickerValueText}>{puit.length || "0"}</Text>
+                          <RNPickerSelect
+                            ref={el => pickerRefs.current[`puit-length-${index}`] = el}
+                            onValueChange={(value) => handlePuitLumiereChange(index, 'length', value)}
+                            items={generatePickerItems(0, 200)}
+                            value={puit.length}
+                            style={pickerSelectStyles}
+                          />
+                        </TouchableOpacity>
+                      </View>
+
+                      <Text style={styles.multiply}>×</Text>
+
+                      <View style={styles.pickerContainer}>
+                        <Text style={styles.pickerLabel}>Largeur (pouces)</Text>
+                        <TouchableOpacity 
+                          style={[styles.pickerTouchable, { height: 45 }]}
+                          onPress={() => openPicker(`puit-width-${index}`)}
+                        >
+                          <Text style={styles.pickerValueText}>{puit.width || "0"}</Text>
+                          <RNPickerSelect
+                            ref={el => pickerRefs.current[`puit-width-${index}`] = el}
+                            onValueChange={(value) => handlePuitLumiereChange(index, 'width', value)}
+                            items={generatePickerItems(0, 200)}
+                            value={puit.width}
+                            style={pickerSelectStyles}
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+
+                    {index > 0 && (
+                      <TouchableOpacity
+                        style={styles.removeSectionButton}
+                        onPress={() => removePuitLumiere(index)}
+                      >
+                        <Text style={styles.deleteX}>✕</Text>
+                        <Text style={styles.removeSectionButtonText}>Supprimer ce puit</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ))}
+
+                <View style={[styles.addSectionButtonContainer, { marginTop: 5 }]}>
+                  <TouchableOpacity
+                    style={[styles.addSectionButton, { paddingVertical: 10 }]}
+                    onPress={addPuitLumiere}
+                  >
+                    <Text style={{color: '#3498db', fontSize: 16}}>➕</Text>
+                    <Text style={styles.addSectionButtonText}>Ajouter un puit de lumière</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* Section Photos */}
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            onPress={() => toggleSection('photos')}
+          >
+            <FontAwesome5 name="camera" size={20} color="white" />
+            <Text style={styles.sectionTitle}>Photos du projet</Text>
+            <FontAwesome5 name={openSections.includes('photos') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
+          </TouchableOpacity>
+          
+          {openSections.includes('photos') && (
+            <View style={[styles.sectionContent, styles.nonPickerSection]}>
+              <View style={styles.photosContainer}>
+                {photos.map(photo => (
+                  <TouchableOpacity
+                    key={photo.id}
+                    style={styles.photoItem}
+                    onPress={() => setSelectedPhoto(photo)}
+                  >
+                    <Image source={{ uri: photo.uri }} style={styles.photo} />
+                    <TouchableOpacity
+                      style={styles.deleteButton}
+                      onPress={() => deletePhoto(photo.id)}
+                    >
+                      <Text style={styles.deleteX}>✕</Text>
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                ))}
+                <TouchableOpacity 
+                  style={styles.addPhoto} 
+                  onPress={openCustomCamera}
+                >
+                  <Text style={{color: '#27ae60', fontSize: 32}}>+</Text>
+                  <Text style={[styles.addPhotoText, { color: '#27ae60', fontWeight: '600' }]}>Capture Instantanée</Text>
                 </TouchableOpacity>
               </View>
             </View>
-          </View>
-        )}
+          )}
 
-        {/* Section Photos */}
-        <TouchableOpacity
-          style={styles.sectionHeader}
-          onPress={() => toggleSection('photos')}
-        >
-          <FontAwesome5 name="camera" size={20} color="white" />
-          <Text style={styles.sectionTitle}>Photos du projet</Text>
-          <FontAwesome5 name={activeSection === 'photos' ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-        </TouchableOpacity>
-        
-        {activeSection === 'photos' && (
-          <View style={[styles.sectionContent, styles.nonPickerSection]}>
-            <Text style={styles.photoNote}></Text>
-            <View style={styles.photosContainer}>
-              {photos.map(photo => (
-                <TouchableOpacity
-                  key={photo.id}
-                  style={styles.photoItem}
-                  onPress={() => setSelectedPhoto(photo)}
-                >
-                  <Image source={{ uri: photo.uri }} style={styles.photo} />
-                  <TouchableOpacity
-                    style={styles.deleteButton}
-                    onPress={() => deletePhoto(photo.id)}
-                  >
-                    <Text style={{color: 'white', fontSize: 16}}>❌</Text>
-                  </TouchableOpacity>
-                </TouchableOpacity>
-              ))}
-              <TouchableOpacity 
-                style={styles.addPhoto} 
-                onPress={openCustomCamera}
-              >
-                <Text style={{color: '#27ae60', fontSize: 32}}>+</Text>
-                <Text style={[styles.addPhotoText, { color: '#27ae60', fontWeight: '600' }]}>Capture Instantanée</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {/* Section Options */}
-        <TouchableOpacity 
-          style={styles.sectionHeader} 
-          onPress={() => toggleSection('options')}
-        >
-          <FontAwesome5 name="cogs" size={20} color="white" />
-          <Text style={styles.sectionTitle}>Autres options</Text>
-          <FontAwesome5 name={activeSection === 'options' ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-        </TouchableOpacity>
-        
-        {activeSection === 'options' && (
-          <View style={[styles.sectionContent, styles.nonPickerSection]}>
-            <TouchableOpacity 
-              style={styles.checkboxItem} 
-              onPress={() => setFormData({...formData, plusieursEpaisseurs: !formData.plusieursEpaisseurs})}
-            >
-           <Text style={{fontSize: 32, color: '#3498db'}}>
-            {formData.plusieursEpaisseurs ? '☑' : '☐'}
-            </Text>
-              <Text style={styles.checkboxLabel}>Plusieurs épaisseurs de toiture</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.checkboxItem} 
-              onPress={() => setFormData({...formData, hydroQuebec: !formData.hydroQuebec})}
-            >
-              <Text style={{fontSize: 32, color: '#3498db'}}>
-                {formData.hydroQuebec ? '☑' : '☐'}
-              </Text>
-              <Text style={styles.checkboxLabel}>Travaux Hydro Québec requis</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.checkboxItem} 
-              onPress={() => setFormData({...formData, grue: !formData.grue})}
-            >
-              <Text style={{fontSize: 32, color: '#3498db'}}>
-                {formData.grue ? '☑' : '☐'}
-              </Text>
-              <Text style={styles.checkboxLabel}>Grue nécessaire</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.checkboxItem} 
-              onPress={() => setFormData({...formData, trackfall: !formData.trackfall})}
-            >
-              <Text style={{fontSize: 32, color: '#3498db'}}>  
-                {formData.trackfall ? '☑' : '☐'}
-              </Text>
-              <Text style={styles.checkboxLabel}>Trackfall et chute</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Section Notes */}
-        <TouchableOpacity 
-          style={styles.sectionHeader} 
-          onPress={() => toggleSection('notes')}
-        >
-          <FontAwesome5 name="sticky-note" size={20} color="white" />
-          <Text style={styles.sectionTitle}>Notes supplémentaires</Text>
-          <FontAwesome5 name={activeSection === 'notes' ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-        </TouchableOpacity>
-        
-        {activeSection === 'notes' && (
-          <View style={[styles.sectionContent, styles.nonPickerSection]}>
-            <TextInput
-              style={styles.notesInput}
-              multiline
-              numberOfLines={4}
-              value={formData.notes}
-              onChangeText={text => setFormData({...formData, notes: text})}
-              placeholder="Décrivez ici toute information supplémentaire importante..."
-            />
-          </View>
-        )}
-
-        {/* Boutons avec Export Evernote */}
-       <View style={styles.buttonContainer}>
-        {/* Première ligne - Export Evernote seul */}
-        <TouchableOpacity style={styles.evernoteButtonFull} onPress={handleEvernoteExport}>
-          <FontAwesome5 name="file-export" size={18} color="white" />
-          <Text style={styles.buttonText}>Export Evernote</Text>
-          </TouchableOpacity>
-         
-          <View style={styles.secondRowButtons}>
-          <TouchableOpacity style={styles.saveButton} onPress={enregistrerSoumission}>
-            <FontAwesome5 name="save" size={18} color="white" />
-            <Text style={styles.buttonText}>Enregistrer</Text>
+          {/* Section Options */}
+          <TouchableOpacity 
+            style={styles.sectionHeader} 
+            onPress={() => toggleSection('options')}
+          >
+            <FontAwesome5 name="cogs" size={20} color="white" />
+            <Text style={styles.sectionTitle}>Autres options</Text>
+            <FontAwesome5 name={openSections.includes('options') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
           </TouchableOpacity>
           
-          <TouchableOpacity style={styles.resetButton} onPress={resetForm}>
-            <FontAwesome5 name="redo" size={18} color="#2c3e50" />
-            <Text style={styles.resetButtonText}>Réinitialiser</Text>
+          {openSections.includes('options') && (
+            <View style={[styles.sectionContent, styles.nonPickerSection]}>
+              <TouchableOpacity 
+                style={styles.checkboxItem} 
+                onPress={() => setFormData({...formData, plusieursEpaisseurs: !formData.plusieursEpaisseurs})}
+              >
+                <Text style={{fontSize: 32, color: '#3498db'}}>
+                  {formData.plusieursEpaisseurs ? '☑' : '☐'}
+                </Text>
+                <Text style={styles.checkboxLabel}>Plusieurs épaisseurs de toiture</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.checkboxItem} 
+                onPress={() => setFormData({...formData, hydroQuebec: !formData.hydroQuebec})}
+              >
+                <Text style={{fontSize: 32, color: '#3498db'}}>
+                  {formData.hydroQuebec ? '☑' : '☐'}
+                </Text>
+                <Text style={styles.checkboxLabel}>Travaux Hydro Québec requis</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.checkboxItem} 
+                onPress={() => setFormData({...formData, grue: !formData.grue})}
+              >
+                <Text style={{fontSize: 32, color: '#3498db'}}>
+                  {formData.grue ? '☑' : '☐'}
+                </Text>
+                <Text style={styles.checkboxLabel}>Grue nécessaire</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.checkboxItem} 
+                onPress={() => setFormData({...formData, trackfall: !formData.trackfall})}
+              >
+                <Text style={{fontSize: 32, color: '#3498db'}}>  
+                  {formData.trackfall ? '☑' : '☐'}
+                </Text>
+                <Text style={styles.checkboxLabel}>Trackfall et chute</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Section Notes */}
+          <TouchableOpacity 
+            style={styles.sectionHeader} 
+            onPress={() => toggleSection('notes')}
+          >
+            <FontAwesome5 name="sticky-note" size={20} color="white" />
+            <Text style={styles.sectionTitle}>Notes supplémentaires</Text>
+            <FontAwesome5 name={openSections.includes('notes') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
           </TouchableOpacity>
-           </View>
-        </View>
-      </ScrollView>
+          
+          {openSections.includes('notes') && (
+            <View style={[styles.sectionContent, styles.nonPickerSection]}>
+              <TextInput
+                style={styles.notesInput}
+                multiline
+                numberOfLines={4}
+                value={formData.notes}
+                onChangeText={text => setFormData({...formData, notes: text})}
+                placeholder="Décrivez ici toute information supplémentaire importante..."
+              />
+            </View>
+          )}
+
+          {/* Boutons avec Export Evernote */}
+      <View style={styles.buttonContainer}>
+  <TouchableOpacity style={styles.mainSaveButton} onPress={handleEnregistrerComplet}>
+    <FontAwesome5 name="save" size={18} color="white" />
+    <Text style={styles.buttonText}>Enregistrer</Text>
+  </TouchableOpacity>
+  
+  <TouchableOpacity style={styles.resetButton} onPress={resetForm}>
+    <FontAwesome5 name="redo" size={18} color="#2c3e50" />
+    <Text style={styles.resetButtonText}>Réinitialiser</Text>
+  </TouchableOpacity>
+</View>
+        </ScrollView>
       </KeyboardAvoidingView>
 
       {/* Caméra Custom Modal */}
@@ -1050,7 +1083,7 @@ const handleEvernoteExport = () => {
               style={styles.closeButton}
               onPress={() => setSelectedPhoto(null)}
             >
-              <Text style={{color: 'white', fontSize: 30}}>❌</Text>
+              <Text style={{color: 'white', fontSize: 30}}>✕</Text>
             </TouchableOpacity>
             <View style={styles.modalContainer}>
               <Image source={{ uri: selectedPhoto.uri }} style={styles.modalImage} />
@@ -1168,6 +1201,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     fontSize: 15,
   },
+  requiredInput: {
+    borderColor: '#e74c3c',
+    borderWidth: 2,
+  },
   grid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1274,11 +1311,20 @@ const styles = StyleSheet.create({
   },
   deleteButton: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
-
-    padding: 5,
-    borderTopLeftRadius: 5,
+    top: 5,
+    right: 5,
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 12,
+  },
+  deleteX: {
+    color: '#e74c3c',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
   },
   checkboxItem: {
     flexDirection: 'row',
@@ -1308,6 +1354,24 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 30,
   },
+  evernoteButtonFull: {
+    flexDirection: 'row',
+    backgroundColor: '#2dbe60',
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  secondRowButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
   saveButton: {
     flexDirection: 'row',
     backgroundColor: '#27ae60',
@@ -1315,54 +1379,48 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    flex: 0.48, // Prend 48% de la largeur
+    flex: 0.48,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
   },
-evernoteButtonFull: {
-    flexDirection: 'row',
-    backgroundColor: '#2dbe60',
-    padding: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10, // Espace entre les lignes
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
-  },
-    // Conteneur pour la deuxième ligne
-  secondRowButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
- resetButton: {
-    flexDirection: 'row',
-    backgroundColor: 'white',
-    borderWidth: 1,
-    borderColor: '#dfe6e9',
-    padding: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 0.48, // Prend 48% de la largeur
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3.84,
-    elevation: 3,
-  },
- buttonText: {
+resetButton: {
+  flexDirection: 'row',
+  backgroundColor: 'white',
+  borderWidth: 1,
+  borderColor: '#dfe6e9',
+  padding: 15,
+  borderRadius: 8,
+  alignItems: 'center',
+  justifyContent: 'center',
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.1,
+  shadowRadius: 3.84,
+  elevation: 3,
+},
+  buttonText: {
     color: 'white',
     fontWeight: '600',
     fontSize: 16,
     marginLeft: 8,
   },
+  mainSaveButton: {
+  flexDirection: 'row',
+  backgroundColor: '#2dbe60',
+  padding: 18,
+  borderRadius: 8,
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginBottom: 15,
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.25,
+  shadowRadius: 3.84,
+  elevation: 5,
+},
   resetButtonText: {
     color: '#2c3e50',
     fontWeight: '600',
@@ -1422,11 +1480,6 @@ evernoteButtonFull: {
     color: 'white',
     fontWeight: '500',
     marginLeft: 10,
-  },
-  photoNote: {
-    color: '#27ae60',
-    marginBottom: 10,
-    fontWeight: '500',
   },
   dimSetContainer: {
     marginTop: 5,
@@ -1519,7 +1572,6 @@ evernoteButtonFull: {
     marginBottom: 1,
     marginHorizontal: 30,
   },
-
 });
 
 export default App;

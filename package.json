@@ -9,6 +9,8 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@react-native-firebase/app": "^22.2.1",
+    "@react-native-firebase/firestore": "^22.2.1",
     "@react-native-picker/picker": "2.11.0",
     "expo": "~53.0.12",
     "expo-dev-client": "~5.2.1",
@@ -17,6 +19,7 @@
     "expo-mail-composer": "~14.1.4",
     "expo-screen-orientation": "~8.1.7",
     "expo-status-bar": "~2.2.3",
+    "firebase": "^11.9.1",
     "prop-types": "^15.8.1",
     "react": "19.0.0",
     "react-native": "0.79.4",
