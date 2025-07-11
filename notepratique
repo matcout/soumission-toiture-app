@@ -1,0 +1,16 @@
+npx expo start --clear --tunnel
+
+git add .
+git commit -m "photo corriger"
+git push
+
+npm run build
+npm run electron-dev
+
+cd C:\Users\matco\Documents\MesProjets\SoumissionToitureClean
+cd C:\Users\matco\Documents\MesProjets\Soumission-toiture-desktop
+
+
+# Crée un ZIP avec date
+$date = Get-Date -Format "yyyy-MM-dd_HH-mm"
+Compress-Archive -Path * -DestinationPath "../Soumission-toiture-desktop_backup$date.zip"

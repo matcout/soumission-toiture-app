@@ -15,21 +15,13 @@ import { StatusBar } from 'expo-status-bar';
 import { FontAwesome5 } from '@expo/vector-icons';
 
 // Imports Firebase et synchronisation
-import { subscribeToSubmissions, createAssignment, updateSubmissionStatus, deleteSubmissionFromFirebase, saveSubmission } from './firebaseFunctions';
-import { subscribeToFolders, saveFolderToFirebase, updateFolderInFirebase, deleteFolderFromFirebase } from './folderSyncFunctions';
+import { subscribeToSubmissions, createAssignment, updateSubmissionStatus, deleteSubmissionFromFirebase } from './firebaseFunctions';
+import { subscribeToFolders } from './folderSyncFunctions';
 import { testFirebaseConnection } from './firebase';
 
 // Imports composants
 import SoumissionForm from './components/SoumissionForm';
-import FolderManagementModal from './FolderManagementModal';
 import AssignmentModal from './AssignmentModal';
-
-// Les 3 dossiers protégés (essentiels au fonctionnement)
-const PROTECTED_FOLDER_IDS = [
-  'system_assignments',
-  'system_pending',
-  'system_completed'
-];
 
 export default function App() {
   // États principaux
@@ -46,8 +38,6 @@ export default function App() {
   
   // États UI
   const [expandedFolders, setExpandedFolders] = useState([]);
-  const [folderModal, setFolderModal] = useState({ visible: false, folder: null, parentFolder: null });
-  const [folderMenuVisible, setFolderMenuVisible] = useState(null);
   const [showAssignmentModal, setShowAssignmentModal] = useState(false);
 
   // Initialisation et synchronisation
@@ -116,81 +106,6 @@ export default function App() {
     }
     
     return [];
-  };
-
-  // Gérer la création/modification de dossier
-  const handleSaveFolder = async (folderData) => {
-    try {
-      if (folderData.id) {
-        // Modification
-        const result = await updateFolderInFirebase(folderData.id, {
-          label: folderData.label,
-          icon: folderData.icon,
-          color: folderData.color
-        }, 'mobile');
-        
-        if (result.success) {
-          Alert.alert('Succès', `"${folderData.label}" a été modifié`);
-        }
-      } else {
-        // Création
-        const newFolder = {
-          label: folderData.label,
-          icon: folderData.icon,
-          color: folderData.color,
-          order: Object.keys(folders).length,
-          level: folderData.parentId ? 1 : 0,
-          parentId: folderData.parentId || null,
-          parentLabel: folderData.parentLabel || null,
-          isSystemFolder: false,
-          filterConfig: null
-        };
-        
-        const result = await saveFolderToFirebase(newFolder, 'mobile');
-        
-        if (result.success) {
-          Alert.alert('Succès', `"${folderData.label}" a été créé`);
-        }
-      }
-    } catch (error) {
-      Alert.alert('Erreur', error.message);
-    }
-    
-    setFolderModal({ visible: false, folder: null, parentFolder: null });
-  };
-
-  // Supprimer un dossier
-  const handleDeleteFolder = async (folderId, folderLabel) => {
-    // Vérifier si c'est un dossier protégé
-    if (PROTECTED_FOLDER_IDS.includes(folderId)) {
-      Alert.alert('Dossier protégé', 'Ce dossier système ne peut pas être supprimé');
-      return;
-    }
-    
-    Alert.alert(
-      'Confirmer la suppression',
-      `Supprimer le dossier "${folderLabel}" ?`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const result = await deleteFolderFromFirebase(folderId);
-              if (result.success) {
-                Alert.alert('Succès', 'Dossier supprimé');
-                if (selectedFolder === folderId) {
-                  setSelectedFolder('system_assignments');
-                }
-              }
-            } catch (error) {
-              Alert.alert('Erreur', error.message);
-            }
-          }
-        }
-      ]
-    );
   };
 
   // Créer un nouvel assignment
@@ -274,16 +189,11 @@ export default function App() {
     const seenIds = new Set();
     
     // Créer une map de tous les dossiers EN ÉLIMINANT LES DOUBLONS
-  Object.values(folders).forEach(folder => {
-    if (!seenIds.has(folder.id)) { // NOUVEAU: Vérifier si on a déjà vu cet ID
-      seenIds.add(folder.id);
-      folderMap[folder.id] = { ...folder, children: [] };
-    }
-  });
-    
-    // Créer une map de tous les dossiers
     Object.values(folders).forEach(folder => {
-      folderMap[folder.id] = { ...folder, children: [] };
+      if (!seenIds.has(folder.id)) {
+        seenIds.add(folder.id);
+        folderMap[folder.id] = { ...folder, children: [] };
+      }
     });
     
     // Forcer l'ordre pour les dossiers système
@@ -335,7 +245,6 @@ export default function App() {
     const isSelected = selectedFolder === folder.id;
     const hasChildren = folder.children && folder.children.length > 0;
     const isExpanded = expandedFolders.includes(folder.id);
-    const isProtected = PROTECTED_FOLDER_IDS.includes(folder.id);
     const count = folder.filter ? folder.filter(submissions).length : 0;
     
     return (
@@ -403,80 +312,8 @@ export default function App() {
                 <Text style={styles.folderBadgeText}>{count}</Text>
               </View>
             )}
-            
-            {!isProtected && (
-              <TouchableOpacity
-                onPress={() => setFolderMenuVisible(folder.id)}
-                style={styles.moreButton}
-              >
-                <FontAwesome5 name="ellipsis-v" size={16} color="#6c7680" />
-              </TouchableOpacity>
-            )}
-            
-            {isProtected && count > 0 && (
-              <FontAwesome5 
-                name={isSelected ? "chevron-down" : "chevron-right"} 
-                size={14} 
-                color="#6c7680" 
-                style={{ marginLeft: 8 }}
-              />
-            )}
           </View>
         </View>
-        
-        {/* Menu contextuel */}
-        {folderMenuVisible === folder.id && (
-          <Modal
-            transparent
-            visible={true}
-            onRequestClose={() => setFolderMenuVisible(null)}
-          >
-            <TouchableOpacity
-              style={styles.modalOverlay}
-              activeOpacity={1}
-              onPress={() => setFolderMenuVisible(null)}
-            >
-              <View style={styles.contextMenu}>
-                {level === 0 && (
-                  <TouchableOpacity
-                    style={styles.contextMenuItem}
-                    onPress={() => {
-                      setFolderModal({ visible: true, folder: null, parentFolder: folder });
-                      setFolderMenuVisible(null);
-                    }}
-                  >
-                    <FontAwesome5 name="plus" size={14} color="#333" />
-                    <Text style={styles.contextMenuText}>Ajouter sous-dossier</Text>
-                  </TouchableOpacity>
-                )}
-                
-                <TouchableOpacity
-                  style={styles.contextMenuItem}
-                  onPress={() => {
-                    setFolderModal({ visible: true, folder: folder, parentFolder: null });
-                    setFolderMenuVisible(null);
-                  }}
-                >
-                  <FontAwesome5 name="edit" size={14} color="#333" />
-                  <Text style={styles.contextMenuText}>Modifier</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity
-                  style={[styles.contextMenuItem, styles.contextMenuItemDanger]}
-                  onPress={() => {
-                    handleDeleteFolder(folder.id, folder.label);
-                    setFolderMenuVisible(null);
-                  }}
-                >
-                  <FontAwesome5 name="trash" size={14} color="#e74c3c" />
-                  <Text style={[styles.contextMenuText, styles.contextMenuTextDanger]}>
-                    Supprimer
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
-          </Modal>
-        )}
         
         {/* Sous-dossiers */}
         {hasChildren && isExpanded && (
@@ -509,12 +346,8 @@ export default function App() {
             </View>
             <View>
               <Text style={styles.appTitle}>Soumission Toiture</Text>
-              <Text style={styles.appVersion}>Mobile v16</Text>
             </View>
           </View>
-          <TouchableOpacity style={styles.closeButton}>
-            <FontAwesome5 name="times" size={28} color="white" />
-          </TouchableOpacity>
         </View>
         
         {/* Bouton nouvelle soumission */}
@@ -535,12 +368,6 @@ export default function App() {
         <View style={styles.mainContent}>
           <View style={styles.foldersSectionHeader}>
             <Text style={styles.foldersTitle}>DOSSIERS</Text>
-            <TouchableOpacity
-              onPress={() => setFolderModal({ visible: true, folder: null, parentFolder: null })}
-              style={styles.addFolderButton}
-            >
-              <FontAwesome5 name="plus" size={24} color="#5a6772" />
-            </TouchableOpacity>
           </View>
           
           <ScrollView style={styles.mainScrollView} showsVerticalScrollIndicator={false}>
@@ -662,14 +489,6 @@ export default function App() {
         </View>
         
         {/* Modals */}
-        <FolderManagementModal
-          visible={folderModal.visible}
-          onClose={() => setFolderModal({ visible: false, folder: null, parentFolder: null })}
-          onSave={handleSaveFolder}
-          folder={folderModal.folder}
-          parentFolder={folderModal.parentFolder}
-        />
-        
         <AssignmentModal
           visible={showAssignmentModal}
           onClose={() => setShowAssignmentModal(false)}
@@ -818,19 +637,12 @@ export default function App() {
                     {isPending && (
                       <TouchableOpacity 
                         style={[styles.actionButton, styles.calculateButton]}
-                        onPress={async () => {
-                          try {
-                            const updatedSubmission = {
-                              ...submission,
-                              needsCalculation: true,
-                              calculationRequestedAt: new Date().toISOString()
-                            };
-                            
-                            await saveSubmission(updatedSubmission);
-                            Alert.alert('Succès', 'Soumission marquée pour calcul au bureau');
-                          } catch (error) {
-                            Alert.alert('Erreur', 'Impossible de marquer pour calcul');
-                          }
+                        onPress={() => {
+                          Alert.alert(
+                            'Fonction bureau', 
+                            'Le calculateur est accessible sur ordinateur seulement',
+                            [{ text: 'OK', style: 'default' }]
+                          );
                         }}
                       >
                         <FontAwesome5 name="calculator" size={14} color="white" />
@@ -881,7 +693,7 @@ export default function App() {
   return renderDashboard();
 }
 
-// STYLES - J'AI AJOUTÉ SEULEMENT LES NOUVEAUX STYLES NÉCESSAIRES
+// STYLES
 const styles = StyleSheet.create({
   container: {
     flex: 1,
