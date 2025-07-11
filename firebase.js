@@ -8,7 +8,7 @@ const firebaseConfig = {
   apiKey: "AIzaSyBfhMUamxx6SDmP5LyQ4XTL95ZZU-GAXPU",
   authDomain: "soumission-toiture-app.firebaseapp.com",
   projectId: "soumission-toiture-app",
-  storageBucket: "soumission-toiture-app.firebasestorage.app",
+  storageBucket: "gs://soumission-toiture-app.firebasestorage.app",
   messagingSenderId: "1072331437814",
   appId: "1:1072331437814:web:cebd4b13f9a17f85a09ed7"
   // Note: measurementId retiré (pas nécessaire pour React Native)
