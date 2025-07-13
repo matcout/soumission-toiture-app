@@ -10,6 +10,9 @@ npm run electron-dev
 cd C:\Users\matco\Documents\MesProjets\SoumissionToitureClean
 cd C:\Users\matco\Documents\MesProjets\Soumission-toiture-desktop
 
+cd C:\Users\Valerie\soumission-toiture-desktop
+cd C:\Users\Valerie\soumission-toiture-app
+
 
 # Crée un ZIP avec date
 $date = Get-Date -Format "yyyy-MM-dd_HH-mm"
