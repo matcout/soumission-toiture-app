@@ -9,7 +9,8 @@ import {
   Alert,
   SafeAreaView,
   Modal,
-  ActivityIndicator
+  ActivityIndicator,
+  Linking
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { FontAwesome5 } from '@expo/vector-icons';
@@ -37,7 +38,7 @@ export default function App() {
   const [selectedSubmission, setSelectedSubmission] = useState(null);
   
   // États UI
-  const [expandedFolders, setExpandedFolders] = useState([]);
+  const [expandedFolders, setExpandedFolders] = useState(['system_project2025', 'projet_2025', 'Projet 2025']); // Toutes les variantes possibles
   const [showAssignmentModal, setShowAssignmentModal] = useState(false);
 
   // Initialisation et synchronisation
@@ -63,7 +64,16 @@ export default function App() {
                   ...folder,
                   filter: folder.filterConfig 
                     ? (submissions) => applyFolderFilter(folder, submissions)
-                    : (submissions) => submissions.filter(s => s.folderId === folder.id)
+                    : (submissions) => {
+                        // Pour les dossiers personnalisés, filtrer par folderId
+                        if (folder.id === 'projet_2025_soumissions') {
+                          return submissions.filter(s => 
+                            s.folderId === 'projet_2025_soumissions' || 
+                            s.status === 'completed'
+                          );
+                        }
+                        return submissions.filter(s => s.folderId === folder.id);
+                      }
                 };
               });
               
@@ -97,7 +107,19 @@ export default function App() {
 
   // Appliquer le filtre d'un dossier
   const applyFolderFilter = (folder, submissions) => {
-    if (!folder.filterConfig) return [];
+    if (!folder.filterConfig) {
+      // Log spécial pour projet_2025_soumissions
+      if (folder.id === 'projet_2025_soumissions') {
+        console.log('🔍 Filtrage soumissions complétées pour:', folder.id);
+        const result = submissions.filter(s => 
+          s.folderId === 'projet_2025_soumissions' || s.status === 'completed'
+        );
+        console.log(`✅ Trouvé ${result.length} soumissions`);
+        return result;
+      }
+      
+      return [];
+    }
     
     const { filterConfig } = folder;
     
@@ -160,6 +182,30 @@ export default function App() {
     setCurrentView('form');
   };
 
+// 🗺️ NOUVELLE FONCTION - Ouvrir Google Maps sur mobile
+ const openAddressInMaps = (address) => {
+  if (!address || !address.trim()) {
+    Alert.alert('Navigation', 'Aucune adresse disponible pour la navigation');
+    return;
+  }
+  
+  const encodedAddress = encodeURIComponent(address.trim());
+  
+  // ✅ TOUJOURS Google Maps web (fonctionne à 100%)
+  const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+  
+  Linking.openURL(googleMapsUrl)
+    .then(() => {
+      console.log('🗺️ Google Maps ouvert');
+    })
+    .catch((error) => {
+      console.error('❌ Erreur ouverture Google Maps:', error);
+      Alert.alert('Erreur', 'Impossible d\'ouvrir Google Maps');
+    });
+};
+
+
+
   // Retour au dashboard
   const handleBackToDashboard = () => {
     setCurrentView('dashboard');
@@ -178,8 +224,23 @@ export default function App() {
   // Obtenir les soumissions filtrées
   const getFilteredSubmissions = () => {
     const folder = folders[selectedFolder];
-    if (!folder || !folder.filter) return [];
-    return folder.filter(submissions);
+    if (!folder || !folder.filter) {
+      console.log('❌ Pas de dossier ou de filtre pour:', selectedFolder);
+      return [];
+    }
+    
+    const filtered = folder.filter(submissions);
+    console.log(`📊 Dossier "${folder.label}" (${selectedFolder}): ${filtered.length} soumissions`);
+    
+    // Debug spécial pour le dossier Soumissions
+    if (selectedFolder === 'projet_2025_soumissions') {
+      console.log('🔍 Debug soumissions complétées:');
+      const completed = submissions.filter(s => s.status === 'completed');
+      console.log(`- Total complétées: ${completed.length}`);
+      console.log(`- Filtrées: ${filtered.length}`);
+    }
+    
+    return filtered;
   };
 
   // Organiser les dossiers en hiérarchie
@@ -199,8 +260,7 @@ export default function App() {
     // Forcer l'ordre pour les dossiers système
     const systemOrder = {
       'system_assignments': 0,
-      'system_pending': 1,
-      'system_completed': 2
+      'system_pending': 1
     };
     
     // Organiser en hiérarchie
@@ -249,28 +309,33 @@ export default function App() {
     
     return (
        <View>
-        <View style={[styles.folderItem, isSelected && styles.folderItemSelected]}>
+        <View style={[
+          styles.folderItem, 
+          isSelected && styles.folderItemSelected
+        ]}>
           <TouchableOpacity
             style={[styles.folderContent, { paddingLeft: 16 + level * 20 }]}
             onPress={() => {
               console.log('📁 Clic sur dossier:', folder.label, '| ID:', folder.id);
               
-              if (hasChildren) {
+              // Si c'est un dossier parent avec des enfants, toggle l'expansion
+              if (hasChildren && level === 0) {
                 console.log('📂 Toggle expansion pour:', folder.label);
                 toggleFolder(folder.id);
                 return;
               }
               
+              // Pour les dossiers système, ouvrir la vue séparée
               if (folder.id === 'system_assignments' || 
-                  folder.id === 'system_pending' || 
-                  folder.id === 'system_completed') {
+                  folder.id === 'system_pending' ||
+                  folder.id === 'projet_2025_soumissions') {
                 console.log('🎯 Navigation vers vue séparée:', folder.label);
                 setSelectedFolder(folder.id);
                 setCurrentView('folderView');
                 return;
               }
               
-              // Comportement normal pour les autres dossiers
+              // Pour tous les autres dossiers (y compris les sous-dossiers), sélectionner
               if (selectedFolder === folder.id) {
                 setSelectedFolder(null);
               } else {
@@ -278,7 +343,7 @@ export default function App() {
               }
             }}
           >
-            {hasChildren && (
+            {hasChildren && level === 0 && (
               <TouchableOpacity
                 onPress={(e) => {
                   e.stopPropagation();
@@ -329,10 +394,18 @@ export default function App() {
     );
   };
 
+
+
+
+
+
+
   // Dashboard principal
   const renderDashboard = () => {
     const currentFolder = folders[selectedFolder];
     const filteredSubmissions = getFilteredSubmissions();
+    
+
     
     return (
       <SafeAreaView style={styles.container}>
@@ -380,8 +453,7 @@ export default function App() {
                 {selectedFolder === folder.id && 
                  folder.id !== 'system_assignments' && 
                  folder.id !== 'system_pending' && 
-                 folder.id !== 'system_completed' && 
-                 (!folder.children || folder.children.length === 0) && (
+                 folder.id !== 'projet_2025_soumissions' && (
                   <View style={styles.submissionsContainer}>
                     {/* Header du dossier avec options */}
                     {folder.id === 'system_assignments' && (
@@ -455,12 +527,10 @@ export default function App() {
                             <View style={[
                               styles.statusBadge,
                               submission.status === 'assignment' && styles.statusAssignment,
-                              submission.status === 'captured' && styles.statusPending,
-                              submission.status === 'completed' && styles.statusCompleted
+                              submission.status === 'captured' && styles.statusPending
                             ]}>
                               <Text style={styles.statusText}>
-                                {submission.status === 'assignment' ? 'Assignment' : 
-                                 submission.status === 'captured' ? 'À compléter' : 'Terminée'}
+                                {submission.status === 'assignment' ? 'Assignment' : 'À compléter'}
                               </Text>
                             </View>
                             <FontAwesome5 name="chevron-right" size={14} color="#6c7680" />
@@ -558,8 +628,8 @@ export default function App() {
           ) : (
             // NOUVEAU STYLE POUR LES CARTES
             filteredSubmissions.map(submission => {
-              const isCompleted = submission.status === 'completed';
               const isPending = submission.status === 'captured' || submission.status === 'pending' || !submission.status;
+              const isCompleted = submission.status === 'completed';
               
               // Calculer la superficie
               const getSuperficie = () => {
@@ -577,24 +647,92 @@ export default function App() {
               
               const photoCount = submission.photos?.length || 0;
               
+
+
+
+
               return (
-                <View
-                  key={submission.id}
-                  style={[styles.assignmentCard, isCompleted && styles.completedCard]}
-                >
-                  {/* En-tête avec adresse et badge statut */}
-                  <View style={styles.cardHeader}>
-                    <FontAwesome5 name="home" size={14} color="#3498db" />
-                    <Text style={styles.cardAddress} numberOfLines={1}>
-                      {submission.client?.adresse || submission.displayName || 'Adresse inconnue'}
-                    </Text>
-                    <View style={[styles.statusBadgeNew, isPending && styles.pendingBadge, isCompleted && styles.completedBadge]}>
-                      <Text style={styles.statusTextNew}>
-                        {submission.status === 'assignment' ? 'Assignment' :
-                         isCompleted ? 'Terminée' : 'À compléter'}
-                      </Text>
-                    </View>
-                  </View>
+         <View
+  key={submission.id}
+  style={styles.assignmentCard}
+>
+  {/* Wrapper pour le longPress */}
+  <TouchableOpacity
+    style={styles.cardTouchable}
+    onPress={() => {
+      setPreviousView('folderView');
+      handleNavigateToForm(submission);
+    }}
+    onLongPress={() => {
+      Alert.alert(
+        'Options',
+        submission.client?.adresse || submission.displayName || 'Cette soumission',
+        [
+          { text: 'Annuler', style: 'cancel' },
+          { 
+            text: 'Modifier', 
+            onPress: () => {
+              setPreviousView('folderView');
+              handleNavigateToForm(submission);
+            }
+          },
+          {
+            text: 'Supprimer',
+            style: 'destructive',
+            onPress: () => handleDeleteSubmission(
+              submission.id, 
+              submission.client?.adresse || submission.displayName || 'cette soumission'
+            )
+          }
+        ]
+      );
+    }}
+    delayLongPress={500} // 500ms pour déclencher le longPress
+    activeOpacity={0.7}
+  >
+    
+    {/* En-tête avec adresse et boutons */}
+    <View style={styles.cardHeader}>
+      <View style={styles.addressRow}>
+        <FontAwesome5 name="home" size={14} color="#3498db" />
+        <Text style={styles.cardAddress} numberOfLines={1}>
+          {submission.client?.adresse || submission.displayName || 'Adresse inconnue'}
+        </Text>
+      </View>
+      
+      {/* Boutons d'action à droite */}
+      <View style={styles.rightActions}>
+        <TouchableOpacity 
+          onPress={(e) => {
+            e.stopPropagation(); // Empêche le onPress de la carte
+            openAddressInMaps(submission.client?.adresse || submission.displayName);
+          }}
+          style={[
+            styles.mapsButton,
+            { opacity: (submission.client?.adresse || submission.displayName) ? 1 : 0.5 }
+          ]}
+          disabled={!submission.client?.adresse && !submission.displayName}
+        >
+          <FontAwesome5 name="map-marker-alt" size={14} color="white" />
+        </TouchableOpacity>
+        
+      
+        
+        <View style={[
+          styles.statusBadgeNew, 
+          isPending && styles.pendingBadge,
+          isCompleted && styles.completedBadge
+        ]}>
+          <Text style={[
+            styles.statusTextNew,
+            isCompleted && { color: 'white' }
+          ]}>
+            {submission.status === 'assignment' ? 'Assignment' : 
+             submission.status === 'completed' ? 'Complétée' : 'À compléter'}
+          </Text>
+        </View>
+      </View>
+    </View>
                   
                   {/* Nom du client */}
                   {submission.client?.nom && (
@@ -634,7 +772,7 @@ export default function App() {
                       <Text style={styles.buttonText}>Voir</Text>
                     </TouchableOpacity>
                     
-                    {isPending && (
+                    {isPending && selectedFolder !== 'projet_2025_soumissions' && (
                       <TouchableOpacity 
                         style={[styles.actionButton, styles.calculateButton]}
                         onPress={() => {
@@ -650,7 +788,10 @@ export default function App() {
                       </TouchableOpacity>
                     )}
                   </View>
+  </TouchableOpacity>
+                  
                 </View>
+                
               );
             })
           )}
@@ -916,9 +1057,6 @@ const styles = StyleSheet.create({
   statusPending: {
     backgroundColor: 'rgba(255, 165, 0, 0.3)',
   },
-  statusCompleted: {
-    backgroundColor: 'rgba(74, 222, 128, 0.3)',
-  },
   statusText: {
     fontSize: 11,
     fontWeight: '600',
@@ -1035,13 +1173,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 16,
   },
-  
-  // NOUVEAUX STYLES POUR L'AFFICHAGE AMÉLIORÉ
-  completedCard: {
-    backgroundColor: '#1a4d3a',
-    borderWidth: 1,
-    borderColor: '#2d7a5a',
-  },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1070,7 +1201,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FEF3C7',
   },
   completedBadge: {
-    backgroundColor: '#D1FAE5',
+    backgroundColor: '#10B981', // Vert pour les complétées
   },
   statusTextNew: {
     fontSize: 11,
@@ -1186,4 +1317,56 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontStyle: 'italic',
   },
+
+   addressTouchable: {
+    flex: 1,
+    marginRight: 10,
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+ cardHeader: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between', // Pour espacer gauche et droite
+  marginBottom: 8,
+},
+
+addressRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  flex: 1, // Prend l'espace disponible
+  marginRight: 10,
+},
+
+cardAddress: {
+  fontSize: 16,
+  fontWeight: 'bold',
+  color: '#ffffff',
+  marginLeft: 8,
+  flex: 1,
+},
+
+rightActions: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 8, // Espacement entre bouton Maps et badge
+},
+
+mapsButton: {
+  backgroundColor: '#27ae60',
+  borderRadius: 20, // Cercle parfait
+  width: 36,
+  height: 36,
+  justifyContent: 'center',
+  alignItems: 'center',
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.25,
+  shadowRadius: 3.84,
+  elevation: 5,
+},
+  
 });

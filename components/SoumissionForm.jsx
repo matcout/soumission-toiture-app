@@ -18,7 +18,8 @@ import {
   PanResponder,
   Animated
 } from 'react-native';
-import { saveSubmissionToFirebase, updateSubmissionInFirebase } from '../firebaseFunctions';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { saveSubmissionToFirebase, updateSubmissionInFirebase, uploadPhotosToFirebase } from '../firebaseFunctions';
 import RNPickerSelect from 'react-native-picker-select';
 import { StatusBar } from 'expo-status-bar';
 import { FontAwesome5 } from '@expo/vector-icons';
@@ -29,7 +30,108 @@ import { storage } from '../firebase';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import ImageViewer from 'react-native-image-zoom-viewer';
 
+// 🔧 ÉTAPE 1 - AJOUTER CES FONCTIONS APRÈS LES IMPORTS
+// Placez ce code vers la ligne 20, après tous les imports
+
+// Fonction de validation Firebase (empêche les erreurs undefined)
+const validateFirebaseData = (data, path = '') => {
+  const errors = [];
+  
+  const validate = (obj, currentPath) => {
+    if (obj === undefined) {
+      errors.push(`Valeur undefined trouvée à: ${currentPath}`);
+      return null;
+    }
+    
+    if (obj === null || typeof obj !== 'object') {
+      return obj;
+    }
+    
+    if (Array.isArray(obj)) {
+      return obj.map((item, index) => validate(item, `${currentPath}[${index}]`));
+    }
+    
+    const cleaned = {};
+    for (const [key, value] of Object.entries(obj)) {
+      const newPath = currentPath ? `${currentPath}.${key}` : key;
+      const cleanedValue = validate(value, newPath);
+      
+      if (cleanedValue !== undefined) {
+        cleaned[key] = cleanedValue;
+      }
+    }
+    
+    return cleaned;
+  };
+  
+  const cleanedData = validate(data, path);
+  
+  if (errors.length > 0) {
+    console.warn('🔧 Valeurs undefined nettoyées:', errors);
+  }
+  
+  return cleanedData;
+};
+
+// Fonction pour créer une soumission sécurisée (sans undefined)
+const createSafeSubmission = (formData, superficie, date, photos) => {
+  const isExistingAssignment = Boolean(formData.isAssignment && formData.assignmentId);
+  
+  return {
+    date: date.toISOString().split('T')[0],
+    client: { 
+      nom: String(formData.nom || ''), 
+      adresse: String(formData.adresse || ''), 
+      telephone: String(formData.telephone || ''), 
+      courriel: String(formData.courriel || '') 
+    },
+    toiture: { 
+      superficie: {
+        toiture: Number(superficie?.toiture || 0),
+        parapets: Number(superficie?.parapets || 0),
+        totale: Number(superficie?.totale || 0)
+      }, 
+      plusieursEpaisseurs: Boolean(formData.plusieursEpaisseurs), 
+      dimensions: Array.isArray(formData.dimensions) ? formData.dimensions : [], 
+      parapets: Array.isArray(formData.parapets) ? formData.parapets : [], 
+      puitsLumiere: Array.isArray(formData.puitsLumiere) ? formData.puitsLumiere : [] 
+    },
+    materiaux: { 
+      nbFeuilles: Number(formData.nbFeuilles || 0), 
+      nbMax: Number(formData.nbMax || 0), 
+      nbEvents: Number(formData.nbEvents || 0), 
+      nbDrains: Number(formData.nbDrains || 0), 
+      trepiedElectrique: Number(formData.trepiedElectrique || 0) 
+    },
+    options: { 
+      hydroQuebec: Boolean(formData.hydroQuebec), 
+      grue: Boolean(formData.grue), 
+      trackfall: Boolean(formData.trackfall) 
+    },
+    notes: String(formData.notes || ''),
+    photos: [], // Sera rempli après upload
+    photoCount: 0, // Sera mis à jour après upload
+    processed: true,
+    exported: true,
+    exportedAt: new Date().toISOString(),
+    status: 'captured',
+    wasAssignment: isExistingAssignment, // ✅ Toujours boolean maintenant
+    completedAt: new Date().toISOString(),
+    platform: 'mobile',
+    version: '1.0.0'
+  };
+};
+
+
+
+
+
+
 const { width } = Dimensions.get('window');
+
+// Constantes pour l'auto-save
+const AUTOSAVE_KEY = 'SOUMISSION_DRAFT';
+const AUTOSAVE_DELAY = 2000; // 2 secondes de délai
 
 // Composant ImageViewer avec react-native-image-zoom-viewer
 const ImageViewerComponent = ({ photos, initialIndex, onClose }) => {
@@ -100,8 +202,201 @@ const ImageViewerComponent = ({ photos, initialIndex, onClose }) => {
   );
 };
 
+
+
+const UploadProgressModal = ({ uploadProgress, setUploadProgress }) => {
+  const [animatedWidth] = useState(new Animated.Value(0));
+  
+  // Animation de la barre de progression
+  useEffect(() => {
+    if (uploadProgress.visible) {
+      Animated.timing(animatedWidth, {
+        toValue: uploadProgress.percentage,
+        duration: 300,
+        useNativeDriver: false,
+      }).start();
+    }
+  }, [uploadProgress.percentage]);
+
+  if (!uploadProgress.visible) return null;
+
+  const { currentPhoto, totalPhotos, percentage, status, errors, startTime } = uploadProgress;
+  const isComplete = percentage === 100;
+  
+  // Calcul vitesse et temps estimé
+  const elapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
+  const photosPerSecond = currentPhoto / Math.max(elapsed, 1);
+  const remainingPhotos = totalPhotos - currentPhoto;
+  const estimatedTimeRemaining = remainingPhotos / Math.max(photosPerSecond, 0.1);
+  
+  return (
+    <Modal visible={true} transparent={true} animationType="fade">
+      <View style={styles.uploadModalOverlay}>
+        <View style={styles.uploadModalContainer}>
+          {/* Header avec icône animée */}
+          <View style={styles.uploadModalHeader}>
+            <View style={styles.uploadIconContainer}>
+              {isComplete ? (
+                <Animated.View style={{ transform: [{ scale: 1.2 }] }}>
+                  <FontAwesome5 name="check-circle" size={32} color="#27ae60" />
+                </Animated.View>
+              ) : (
+                <Animated.View style={{ 
+                  transform: [{ 
+                    rotate: animatedWidth.interpolate({
+                      inputRange: [0, 100],
+                      outputRange: ['0deg', '360deg']
+                    })
+                  }] 
+                }}>
+                  <FontAwesome5 name="cloud-upload-alt" size={32} color="#3498db" />
+                </Animated.View>
+              )}
+            </View>
+            <Text style={styles.uploadModalTitle}>
+              {isComplete ? '🎉 Upload terminé !' : '📤 Upload en cours...'}
+            </Text>
+            {!isComplete && estimatedTimeRemaining > 0 && (
+              <Text style={styles.timeEstimate}>
+                Temps estimé: {estimatedTimeRemaining < 60 
+                  ? `${Math.round(estimatedTimeRemaining)}s` 
+                  : `${Math.round(estimatedTimeRemaining/60)}min`}
+              </Text>
+            )}
+          </View>
+
+          {/* Barre de progression animée */}
+          <View style={styles.mainProgressContainer}>
+            <View style={styles.progressBarBackground}>
+              <Animated.View 
+                style={[
+                  styles.progressBarFill, 
+                  { 
+                    width: animatedWidth.interpolate({
+                      inputRange: [0, 100],
+                      outputRange: ['0%', '100%'],
+                      extrapolate: 'clamp',
+                    }),
+                    backgroundColor: isComplete ? '#27ae60' : '#3498db'
+                  }
+                ]} 
+              />
+            </View>
+            <View style={styles.progressTextContainer}>
+              <Text style={styles.percentageText}>{percentage}%</Text>
+              <Text style={styles.speedText}>
+                {photosPerSecond > 0 && `${photosPerSecond.toFixed(1)} photos/s`}
+              </Text>
+            </View>
+          </View>
+
+          {/* Statut détaillé */}
+          <View style={styles.uploadStatusContainer}>
+            <Text style={styles.uploadStatusText}>{status}</Text>
+            <View style={styles.statsContainer}>
+              <Text style={styles.uploadCounterText}>
+                📸 {currentPhoto}/{totalPhotos} photos
+              </Text>
+              {errors.length > 0 && (
+                <Text style={styles.errorCountText}>
+                  ⚠️ {errors.length} erreur{errors.length > 1 ? 's' : ''}
+                </Text>
+              )}
+            </View>
+          </View>
+
+          {/* Grille des photos avec statut */}
+          {totalPhotos > 0 && totalPhotos <= 12 && (
+            <View style={styles.photoStatusContainer}>
+              <Text style={styles.photoStatusTitle}>Progression:</Text>
+              <View style={styles.photoIconsGrid}>
+                {Array.from({ length: totalPhotos }, (_, index) => {
+                  const photoNumber = index + 1;
+                  let iconName = 'clock';
+                  let iconColor = '#bdc3c7';
+                  let bgColor = '#ecf0f1';
+                  
+                  if (photoNumber < currentPhoto) {
+                    iconName = 'check-circle';
+                    iconColor = '#27ae60';
+                    bgColor = '#d5f4e6';
+                  } else if (photoNumber === currentPhoto && !isComplete) {
+                    iconName = 'upload';
+                    iconColor = '#3498db';
+                    bgColor = '#dff3ff';
+                  }
+                  
+                  return (
+                    <Animated.View 
+                      key={index} 
+                      style={[
+                        styles.photoIconWrapper,
+                        { backgroundColor: bgColor }
+                      ]}
+                    >
+                      <FontAwesome5 name={iconName} size={12} color={iconColor} />
+                      <Text style={[styles.photoIconNumber, { color: iconColor }]}>
+                        {photoNumber}
+                      </Text>
+                    </Animated.View>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+
+          {/* Résumé final */}
+          {isComplete && (
+            <View style={styles.completionSummary}>
+              <Text style={styles.summaryText}>
+                ✅ {totalPhotos - errors.length} photos uploadées avec succès
+              </Text>
+              {errors.length > 0 && (
+                <Text style={styles.summaryErrorText}>
+                  ⚠️ {errors.length} photo{errors.length > 1 ? 's' : ''} échouée{errors.length > 1 ? 's' : ''}
+                </Text>
+              )}
+              <Text style={styles.summaryTimeText}>
+                ⏱️ Terminé en {Math.round(elapsed)}s
+              </Text>
+            </View>
+          )}
+
+          {/* Erreurs détaillées (max 3) */}
+          {errors.length > 0 && (
+            <View style={styles.errorsContainer}>
+              <Text style={styles.errorsTitle}>⚠️ Détails des erreurs:</Text>
+              {errors.slice(0, 3).map((error, index) => (
+                <Text key={index} style={styles.errorText}>• {error}</Text>
+              ))}
+              {errors.length > 3 && (
+                <Text style={styles.errorText}>... et {errors.length - 3} autres</Text>
+              )}
+            </View>
+          )}
+
+          {/* Bouton fermer (visible seulement si terminé) */}
+          {isComplete && (
+            <TouchableOpacity 
+              style={styles.closeUploadButton}
+              onPress={() => setUploadProgress(prev => ({ ...prev, visible: false }))}
+            >
+              <Text style={styles.closeUploadButtonText}>Continuer</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
 const SoumissionForm = ({ prefilledData = null, onReturn, onComplete }) => {
   const pickerRefs = useRef({});
+  const autoSaveTimerRef = useRef(null);
+  const isRestoringRef = useRef(false);
+  
+  // État pour savoir si on a un brouillon
+  const [hasDraft, setHasDraft] = useState(false);
 
   const [formData, setFormData] = useState({
     nom: prefilledData?.client?.nom || '',
@@ -146,6 +441,118 @@ const SoumissionForm = ({ prefilledData = null, onReturn, onComplete }) => {
   const [date] = useState(new Date());
   const [openSections, setOpenSections] = useState(['client', 'dimensions', 'parapets', 'materiaux', 'options', 'notes', 'photos']);
   const [showCamera, setShowCamera] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({
+  visible: false,
+  currentPhoto: 0,
+  totalPhotos: 0,
+  percentage: 0,
+  status: 'Préparation...',
+  errors: []
+});
+
+  // Fonction pour sauvegarder le brouillon (silencieusement)
+  const saveDraft = async () => {
+    try {
+      const draftData = {
+        formData,
+        photos: photos.map(photo => ({
+          id: photo.id,
+          uri: photo.uri,
+          // Ne pas sauvegarder les URIs Firebase pour éviter les problèmes
+          isLocal: !photo.uri.startsWith('https://firebasestorage.googleapis.com')
+        })),
+        superficie,
+        openSections,
+        timestamp: new Date().toISOString(),
+        isAssignment: formData.isAssignment,
+        assignmentId: formData.assignmentId
+      };
+      
+      await AsyncStorage.setItem(AUTOSAVE_KEY, JSON.stringify(draftData));
+      setHasDraft(true);
+      
+    } catch (error) {
+      console.error('Erreur sauvegarde brouillon:', error);
+    }
+  };
+
+  // Fonction pour charger le brouillon (silencieusement)
+  const loadDraft = async () => {
+    try {
+      const draftString = await AsyncStorage.getItem(AUTOSAVE_KEY);
+      if (draftString) {
+        const draft = JSON.parse(draftString);
+        
+        // Ne charger le brouillon que si on n'est pas en train d'éditer un assignment existant
+        // ou si c'est le même assignment
+        if (!prefilledData || (draft.assignmentId === prefilledData?.id)) {
+          // Restauration automatique silencieuse
+          isRestoringRef.current = true;
+          setFormData(draft.formData);
+          setSuperficie(draft.superficie);
+          setOpenSections(draft.openSections || ['client', 'dimensions', 'parapets', 'materiaux', 'options', 'notes', 'photos']);
+          
+          // Restaurer uniquement les photos locales
+          const localPhotos = draft.photos.filter(photo => photo.isLocal);
+          setPhotos(localPhotos);
+          
+          setHasDraft(true);
+          
+          setTimeout(() => {
+            isRestoringRef.current = false;
+          }, 1000);
+        }
+      }
+    } catch (error) {
+      console.error('Erreur chargement brouillon:', error);
+    }
+  };
+
+  // Nettoyer le brouillon
+  const clearDraft = async () => {
+    try {
+      await AsyncStorage.removeItem(AUTOSAVE_KEY);
+      setHasDraft(false);
+    } catch (error) {
+      console.error('Erreur suppression brouillon:', error);
+    }
+  };
+
+  // Charger le brouillon au démarrage
+  useEffect(() => {
+    loadDraft();
+  }, []);
+
+  // Auto-save avec debounce
+  useEffect(() => {
+    // Ne pas sauvegarder pendant la restauration ou si pas de changements
+    if (isRestoringRef.current) return;
+    
+    // Vérifier si on a des données à sauvegarder
+    const hasData = formData.nom || formData.adresse || formData.telephone || 
+                   formData.courriel || formData.notes || photos.length > 0 ||
+                   formData.nbFeuilles > 0 || formData.nbMax > 0 || 
+                   formData.nbEvents > 0 || formData.nbDrains > 0;
+    
+    if (!hasData) return;
+    
+    // Clear previous timer
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+    
+    // Set new timer
+    autoSaveTimerRef.current = setTimeout(() => {
+      saveDraft();
+    }, AUTOSAVE_DELAY);
+    
+    // Cleanup
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  }, [formData, photos, superficie, openSections]);
 
   // Formatage du numéro de téléphone
   const formatPhoneNumber = (value) => {
@@ -197,7 +604,6 @@ const SoumissionForm = ({ prefilledData = null, onReturn, onComplete }) => {
       
       if (photos.length === 0) {
         await RNShare.open({ message: report, title: subject, subject: subject });
-        showNotification('Rapport partagé', 'success');
         return;
       }
 
@@ -223,14 +629,12 @@ const SoumissionForm = ({ prefilledData = null, onReturn, onComplete }) => {
         }
       }, 5000);
 
-      showNotification(`Rapport et ${photos.length} photo${photos.length > 1 ? 's' : ''} partagés !`, 'success');
     } catch (error) {
       if (error.message === 'User did not share') {
         console.log('Utilisateur a annulé le partage');
         return;
       }
       console.error('Erreur react-native-share:', error);
-      showNotification('Erreur lors du partage', 'error');
     }
   };
 
@@ -302,146 +706,167 @@ ${currentDate} ${currentTime}
   };
 
   // Enregistrement complet
-  const handleEnregistrerComplet = async () => {
-    if (!formData.adresse.trim()) {
-      showNotification('Adresse du projet requise', 'error');
-      return;
-    }
 
-    const hasPhotos = photos.length > 0;
-    
+
+const handleEnregistrerComplet = async () => {
+  if (!formData.adresse.trim()) {
+    Alert.alert('Erreur', 'Adresse du projet requise');
+    return;
+  }
+
+  const hasPhotos = photos.length > 0;
+  
+  // Vérifier le nombre de photos avec avertissement
+  if (photos.length > 25) {
     Alert.alert(
-      'Enregistrer la soumission',
-      hasPhotos 
-        ? `Enregistrer et partager la soumission avec ${photos.length} photo${photos.length > 1 ? 's' : ''} ?`
-        : 'Enregistrer et partager la soumission (aucune photo) ?',
+      'Trop de photos',
+      `Vous avez ${photos.length} photos. Pour éviter les erreurs, la limite recommandée est de 20 photos.\n\nContinuer quand même ?`,
       [
         { text: 'Annuler', style: 'cancel' },
-        { text: 'Enregistrer', onPress: async () => { await processCompleteSubmission(); }, style: 'default' }
+        { text: 'Continuer', onPress: () => proceedWithSave() }
       ]
     );
-  };
+    return;
+  }
+  
+  // Avertissement pour 20-25 photos
+  if (photos.length >= 20) {
+    Alert.alert(
+      'Beaucoup de photos',
+      `Vous avez ${photos.length} photos. Cela peut prendre plus de temps à sauvegarder.\n\nContinuer ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Continuer', onPress: () => proceedWithSave() }
+      ]
+    );
+    return;
+  }
+  
+  // Procéder normalement si moins de 20 photos
+  proceedWithSave();
+};
+
+// Fonction helper pour procéder à la sauvegarde
+const proceedWithSave = () => {
+  const hasPhotos = photos.length > 0;
+  
+  Alert.alert(
+    'Enregistrer la soumission',
+    hasPhotos 
+      ? `Enregistrer et partager la soumission avec ${photos.length} photo${photos.length > 1 ? 's' : ''} ?\n\n⏱️ Temps estimé: ${Math.ceil(photos.length * 3)} secondes`
+      : 'Enregistrer et partager la soumission (aucune photo) ?',
+    [
+      { text: 'Annuler', style: 'cancel' },
+      { text: 'Enregistrer', onPress: async () => { await processCompleteSubmission(); }, style: 'default' }
+    ]
+  );
+};
 
   // Process de soumission complet
-  const processCompleteSubmission = async () => {
-    try {
-      showNotification('💾 Enregistrement en cours...', 'success');
 
-      const isExistingAssignment = formData.isAssignment && formData.assignmentId;
+const processCompleteSubmission = async () => {
+  try {
+    console.log('🚀 Début sauvegarde soumission...');
+    
+    // Validation préliminaire
+    if (!formData.adresse || formData.adresse.trim() === '') {
+      Alert.alert('Erreur', 'Adresse du projet requise');
+      return;
+    }
+    
+    // Créer les données de base (sans photos)
+    const baseSubmission = createSafeSubmission(formData, superficie, date, photos);
+    
+    // Valider les données avant sauvegarde
+    const validatedSubmission = validateFirebaseData(baseSubmission);
+    
+    console.log('✅ Données validées pour Firebase');
+    
+    // Déterminer l'ID de soumission
+    const isExistingAssignment = Boolean(formData.isAssignment && formData.assignmentId);
+    const address = formData.adresse.trim();
+    const submissionId = isExistingAssignment ? formData.assignmentId : address
+      .toLowerCase()
+      .replace(/[^a-zA-Z0-9\s]/g, '')
+      .replace(/\s+/g, '_')
+      .substring(0, 60);
+    
+    console.log(`📋 ID soumission: ${submissionId}`);
+    
+    // Upload des photos avec la nouvelle fonction robuste
+    // ✅ REMPLACER par ceci
+const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUploadProgress);
+    
+    // Mettre à jour les données avec les photos
+    validatedSubmission.photos = photoResult.uploadedUrls;
+    validatedSubmission.photoCount = photoResult.uploadedUrls.length;
+    validatedSubmission.uploadStats = photoResult.stats;
+    
+    if (photoResult.errors.length > 0) {
+      validatedSubmission.uploadErrors = photoResult.errors;
+    }
+    
+    console.log(`📸 Photos: ${photoResult.stats.uploaded}/${photoResult.stats.total} uploadées`);
+    
+    // Sauvegarder dans Firebase
+    let firebaseResult;
+    if (isExistingAssignment) {
+      console.log('🔄 Mise à jour assignment existant...');
+      firebaseResult = await updateSubmissionInFirebase(submissionId, validatedSubmission);
+    } else {
+      console.log('🆕 Création nouvelle soumission...');
+      firebaseResult = await saveSubmissionToFirebase(validatedSubmission);
+    }
+    
+    if (firebaseResult.success) {
+      console.log('✅ Soumission sauvegardée avec succès');
       
-      const address = formData.adresse || 'projet_sans_adresse';
-      const submissionId = isExistingAssignment ? formData.assignmentId : address
-        .toLowerCase()
-        .replace(/[^a-zA-Z0-9\s]/g, '')
-        .replace(/\s+/g, '_')
-        .substring(0, 60);
-
-      // Upload des photos vers Firebase Storage
-      showNotification('📸 Upload des photos...', 'success');
-      const uploadedPhotoUrls = [];
+      // Nettoyer le brouillon après succès
+      await clearDraft();
       
-      for (let i = 0; i < photos.length; i++) {
-        const photo = photos[i];
-        
-        // Vérifier si c'est déjà une URL Firebase
-        if (photo.uri.startsWith('https://firebasestorage.googleapis.com')) {
-          console.log(`Photo ${i + 1} déjà sur Firebase`);
-          uploadedPhotoUrls.push(photo.uri);
-          continue;
-        }
-        
-        try {
-          console.log(`Upload photo ${i + 1}/${photos.length}...`);
-          
-          const timestamp = Date.now();
-          const photoName = `${submissionId}_photo_${i}_${timestamp}.jpg`;
-          const storageRef = ref(storage, `soumissions/${submissionId}/${photoName}`);
-          
-          const response = await fetch(photo.uri);
-          const blob = await response.blob();
-          
-          await uploadBytes(storageRef, blob);
-          
-          const downloadUrl = await getDownloadURL(storageRef);
-          uploadedPhotoUrls.push(downloadUrl);
-          
-          console.log(`✅ Photo ${i + 1} uploadée avec succès`);
-        } catch (photoError) {
-          console.error(`Erreur upload photo ${i + 1}:`, photoError);
-          showNotification(`⚠️ Erreur upload photo ${i + 1}`, 'error');
-        }
-      }
-
-      const soumission = {
-        date: date.toISOString().split('T')[0],
-        client: { 
-          nom: formData.nom, 
-          adresse: formData.adresse, 
-          telephone: formData.telephone, 
-          courriel: formData.courriel 
-        },
-        toiture: { 
-          superficie: superficie, 
-          plusieursEpaisseurs: formData.plusieursEpaisseurs, 
-          dimensions: formData.dimensions, 
-          parapets: formData.parapets, 
-          puitsLumiere: formData.puitsLumiere 
-        },
-        materiaux: { 
-          nbFeuilles: formData.nbFeuilles, 
-          nbMax: formData.nbMax, 
-          nbEvents: formData.nbEvents, 
-          nbDrains: formData.nbDrains, 
-          trepiedElectrique: formData.trepiedElectrique 
-        },
-        options: { 
-          hydroQuebec: formData.hydroQuebec, 
-          grue: formData.grue, 
-          trackfall: formData.trackfall 
-        },
-        notes: formData.notes,
-        photos: uploadedPhotoUrls,
-        photoCount: uploadedPhotoUrls.length,
-        processed: true,
-        exported: true,
-        exportedAt: new Date().toISOString(),
-        status: 'captured',
-        wasAssignment: isExistingAssignment,
-        completedAt: new Date().toISOString()
-      };
-
-      let firebaseResult;
-      if (isExistingAssignment) {
-        console.log('🔄 Mise à jour assignment existant:', submissionId);
-        firebaseResult = await updateSubmissionInFirebase(submissionId, soumission);
+      // Message de succès personnalisé selon les résultats
+      if (photoResult.errors.length === 0) {
+        Alert.alert(
+          'Succès !', 
+          `Soumission sauvegardée avec ${photoResult.stats.uploaded} photos`
+        );
       } else {
-        console.log('💾 Création nouvelle soumission:', submissionId);
-        firebaseResult = await saveSubmissionToFirebase(soumission);
+        Alert.alert(
+          'Sauvegarde réussie avec avertissements',
+          `Soumission sauvegardée.\n✅ ${photoResult.stats.uploaded} photos uploadées\n⚠️ ${photoResult.errors.length} photos échouées\n\nErreurs:\n${photoResult.errors.slice(0, 3).join('\n')}${photoResult.errors.length > 3 ? '\n...' : ''}`
+        );
       }
       
-      if (firebaseResult.success) {
-        showNotification('✅ Sauvegardé dans le cloud avec photos!', 'success');
-      } else {
-        showNotification('⚠️ Sauvegarde locale (cloud indisponible)', 'success');
-      }
-
-      showNotification('📤 Préparation du partage...', 'success');
-      
+      // Partager
       setTimeout(async () => {
         await shareWithRNShare();
         setTimeout(() => {
-          showNotification('🎉 Soumission complétée avec succès !', 'success');
           if (onComplete) {
             onComplete(submissionId);
           }
         }, 1000);
       }, 500);
-
-    } catch (error) {
-      console.error('Erreur lors de l\'enregistrement complet:', error);
-      showNotification('❌ Erreur lors de l\'enregistrement', 'error');
+      
+    } else {
+      throw new Error(firebaseResult.error || 'Erreur sauvegarde Firebase');
     }
-  };
+
+  } catch (error) {
+    console.error('❌ Erreur processCompleteSubmission:', error);
+    
+    Alert.alert(
+      'Erreur sauvegarde',
+      `Erreur: ${error.message}\n\nVos données sont sauvegardées en brouillon automatiquement.`,
+      [
+        { text: 'OK', style: 'default' },
+        { 
+          text: 'Réessayer', 
+          onPress: () => processCompleteSubmission() 
+        }
+      ]
+    );
+  }
+};
 
   // Génération des items pour les pickers
   const generatePickerItems = (start, end) => {
@@ -449,7 +874,7 @@ ${currentDate} ${currentTime}
   };
 
   // Réinitialisation du formulaire
-  const resetForm = () => {
+  const resetForm = async () => {
     setFormData({
       nom: '', adresse: '', telephone: '', courriel: '',
       dimensions: [{ length: 0, width: 0, name: 'Section 1' }],
@@ -459,7 +884,7 @@ ${currentDate} ${currentTime}
       plusieursEpaisseurs: false, hydroQuebec: false, grue: false, trackfall: false, notes: ''
     });
     setPhotos([]);
-    showNotification('Formulaire réinitialisé', 'success');
+    await clearDraft();
   };
 
   // Gestion des puits de lumière
@@ -555,7 +980,6 @@ ${currentDate} ${currentTime}
           style: 'destructive',
           onPress: () => {
             setPhotos(photos.filter(photo => photo.id !== id));
-            showNotification('Photo supprimée', 'success');
           }
         }
       ]
@@ -570,10 +994,9 @@ ${currentDate} ${currentTime}
   // Gérer photo prise
   const handlePhotoTaken = (photo) => {
     setPhotos([...photos, photo]);
-    showNotification('Photo ajoutée instantanément !', 'success');
   };
 
-  // Header du formulaire
+  // Header du formulaire (sans indicateur visuel)
   const FormHeader = () => (
     <View style={styles.formHeader}>
       <TouchableOpacity style={styles.backButton} onPress={onReturn}>
@@ -1118,6 +1541,14 @@ ${currentDate} ${currentTime}
         />
       )}
 
+      
+
+   {/* ✅ NOUVEAU: Modal de progression d'upload */}
+      <UploadProgressModal 
+        uploadProgress={uploadProgress} 
+        setUploadProgress={setUploadProgress} 
+      />
+
       {/* Notification */}
       {notification.visible && (
         <View style={[styles.notification, notification.type === 'success' ? styles.successNotification : styles.errorNotification]}>
@@ -1126,13 +1557,15 @@ ${currentDate} ${currentTime}
         </View>
       )}
 
+
       <StatusBar style="light" />
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f7fa' },
+
+container: { flex: 1, backgroundColor: '#f5f7fa' },
   formHeader: { backgroundColor: '#2c3e50', flexDirection: 'row', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 50 : 20, paddingBottom: 20, paddingHorizontal: 20 },
   backButton: { flexDirection: 'row', alignItems: 'center', marginRight: 15 },
   backText: { color: 'white', marginLeft: 8, fontSize: 16 },
@@ -1208,6 +1641,290 @@ const styles = StyleSheet.create({
   closeButtonFullScreen: { padding: 10 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white' },
   loadingText: { marginTop: 10, color: '#666', fontSize: 16 },
+  // Styles pour le modal de progression
+  progressModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  progressModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 15,
+    padding: 25,
+    width: '100%',
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 20,
+  },
+  progressHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+    justifyContent: 'center',
+  },
+  progressTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    marginLeft: 10,
+  },
+  progressBarContainer: {
+    marginBottom: 20,
+  },
+  progressBarBackground: {
+    height: 12,
+    backgroundColor: '#ecf0f1',
+    borderRadius: 6,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#3498db',
+    borderRadius: 6,
+  },
+  progressPercentage: {
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#3498db',
+    marginTop: 8,
+  },
+  progressStatus: {
+    textAlign: 'center',
+    fontSize: 16,
+    color: '#2c3e50',
+    marginBottom: 10,
+    fontWeight: '500',
+  },
+  progressCounter: {
+    textAlign: 'center',
+    fontSize: 14,
+    color: '#7f8c8d',
+    marginBottom: 20,
+  },
+  photoStatusList: {
+    maxHeight: 150,
+    marginBottom: 15,
+  },
+  photoStatusItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 3,
+  },
+  photoStatusIcon: {
+    fontSize: 16,
+    marginRight: 10,
+    width: 20,
+  },
+  photoStatusText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  errorSection: {
+    backgroundColor: '#fff3cd',
+    padding: 15,
+    borderRadius: 8,
+    borderColor: '#ffeaa7',
+    borderWidth: 1,
+  },
+  errorTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#856404',
+    marginBottom: 5,
+  },
+  errorText: {
+    fontSize: 12,
+    color: '#856404',
+    marginBottom: 2,
+  },
+  
+uploadModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  uploadModalContainer: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 24,
+    minWidth: 320,
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  uploadModalHeader: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  uploadIconContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#f8f9fa',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  uploadModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#2c3e50',
+    textAlign: 'center',
+  },
+  mainProgressContainer: {
+    marginBottom: 20,
+  },
+  progressBarBackground: {
+    height: 8,
+    backgroundColor: '#ecf0f1',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 4,
+    // ✅ Retiré 'transition' qui ne fonctionne pas en React Native
+  },
+  percentageText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2c3e50',
+    textAlign: 'center',
+  },
+  uploadStatusContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  uploadStatusText: {
+    fontSize: 14,
+    color: '#7f8c8d',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  uploadCounterText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#3498db',
+  },
+  photoStatusContainer: {
+    marginBottom: 16,
+  },
+  photoStatusTitle: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#2c3e50',
+    marginBottom: 12,
+  },
+  photoIconsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    // ✅ Retiré 'gap' qui peut poser problème selon la version RN
+  },
+  photoIconWrapper: {
+    alignItems: 'center',
+    margin: 4,
+  },
+  photoIconNumber: {
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  errorsContainer: {
+    backgroundColor: '#fdf2e9',
+    borderWidth: 1,
+    borderColor: '#f39c12',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  errorsTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#e67e22',
+    marginBottom: 8,
+  },
+  errorText: {
+    fontSize: 12,
+    color: '#d35400',
+    marginBottom: 2,
+  },
+  closeUploadButton: {
+    backgroundColor: '#3498db',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  closeUploadButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  timeEstimate: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  progressTextContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  speedText: {
+    fontSize: 11,
+    color: '#95a5a6',
+    fontStyle: 'italic',
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  errorCountText: {
+    fontSize: 12,
+    color: '#e74c3c',
+    fontWeight: '500',
+  },
+  completionSummary: {
+    backgroundColor: '#d5f4e6',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  summaryText: {
+    fontSize: 14,
+    color: '#27ae60',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  summaryErrorText: {
+    fontSize: 12,
+    color: '#e67e22',
+    marginBottom: 4,
+  },
+  summaryTimeText: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    fontStyle: 'italic',
+  },
+
+  
 });
 
 export default SoumissionForm;

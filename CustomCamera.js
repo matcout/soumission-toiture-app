@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { Camera, useCameraDevices, useCameraPermission } from 'react-native-vision-camera';
 import { FontAwesome5 } from '@expo/vector-icons';
+import * as FileSystem from 'expo-file-system';
 
 const CustomCamera = ({ visible, onClose, onPhotoTaken }) => {
   const camera = useRef(null);
@@ -52,42 +53,64 @@ const CustomCamera = ({ visible, onClose, onPhotoTaken }) => {
   const { width, height } = screenData;
   const isLandscape = width > height;
 
-  const takePhoto = async () => {
-    try {
-      if (camera.current == null) {
-        Alert.alert('Erreur', 'Caméra non disponible');
-        return;
-      }
 
-      // Animation flash blanc
-      setFlashAnimation(true);
-      setTimeout(() => setFlashAnimation(false), 150);
 
-      // Feedback visuel
-      setLastPhotoFeedback(true);
-      setTimeout(() => setLastPhotoFeedback(false), 800);
+// 🔧 OPTIMISATION: Compression photos dans CustomCamera.js
+// Modifier la fonction takePhoto pour des photos plus légères
 
-      const photo = await camera.current.takePhoto({
-        quality: 0.8,
-        flash: flash,
-        enableAutoRedEyeReduction: true,
-        format: 'jpeg',
-      });
-
-      const newPhoto = {
-        id: Date.now().toString(),
-        uri: Platform.OS === 'ios' ? `file://${photo.path}` : photo.path,
-      };
-
-      setSessionPhotos(prev => [...prev, newPhoto]);
-      setPhotoCount(prev => prev + 1);
-      onPhotoTaken(newPhoto);
-
-    } catch (error) {
-      console.error('Erreur lors de la prise de photo:', error);
-      Alert.alert('Erreur', 'Impossible de prendre la photo');
+const takePhoto = async () => {
+  try {
+    if (camera.current == null) {
+      Alert.alert('Erreur', 'Caméra non disponible');
+      return;
     }
-  };
+
+    setFlashAnimation(true);
+    setTimeout(() => setFlashAnimation(false), 150);
+    setLastPhotoFeedback(true);
+    setTimeout(() => setLastPhotoFeedback(false), 800);
+
+    // ✅ CONFIGURATION OPTIMALE QUALITÉ/PERFORMANCE
+    const photo = await camera.current.takePhoto({
+      quality: 0.85,           // ✅ Excellente qualité
+      flash: flash,
+      enableAutoRedEyeReduction: true,
+      format: 'jpeg',
+      enableShutterSound: false,
+      skipMetadata: false,
+      // ✅ Ajouts pour iPhone
+      enablePortraitEffectsMatteDelivery: false,
+      enableDepthData: false,
+      qualityPrioritization: 'quality', // Prioriser la qualité
+    });
+
+    const fileInfo = await FileSystem.getInfoAsync(photo.path);
+    const fileSizeMB = fileInfo.size / 1024 / 1024;
+    
+    console.log(`📸 Photo capturée: ${fileSizeMB.toFixed(2)}MB (qualité 0.6)`);
+    
+    // ✅ Avertissement seulement si > 10MB
+    if (fileSizeMB > 8) {
+      console.warn(`⚠️ Photo très lourde: ${fileSizeMB.toFixed(2)}MB`);
+    }
+
+    const newPhoto = {
+      id: Date.now().toString(),
+      uri: Platform.OS === 'ios' ? `file://${photo.path}` : photo.path,
+      size: fileInfo.size,
+      timestamp: new Date().toISOString(),
+      quality: 0.6 // ✅ Tracer la qualité
+    };
+
+    setSessionPhotos(prev => [...prev, newPhoto]);
+    setPhotoCount(prev => prev + 1);
+    onPhotoTaken(newPhoto);
+
+  } catch (error) {
+    console.error('Erreur lors de la prise de photo:', error);
+    Alert.alert('Erreur', 'Impossible de prendre la photo');
+  }
+};
 
   const finishAndClose = () => {
     onClose();

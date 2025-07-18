@@ -1,5 +1,5 @@
-// firebaseFunctions.js - MOBILE - VERSION AVEC IDS UNIQUES
-// Toutes les fonctions Firebase : soumissions + dossiers
+// firebaseFunctions.js - MOBILE - VERSION COMPLÈTE avec upload photos
+// Toutes les fonctions Firebase : soumissions + dossiers + photos
 
 import { 
   collection, 
@@ -15,7 +15,173 @@ import {
   orderBy,
   where 
 } from 'firebase/firestore';
-import { db } from './firebase';
+
+// ✅ AJOUTER CES IMPORTS POUR FIREBASE STORAGE
+import { 
+  ref, 
+  uploadBytes, 
+  getDownloadURL 
+} from 'firebase/storage';
+
+import { db, storage } from './firebase'; // ✅ Importer storage aussi
+
+// ==========================================
+// 📸 FONCTION UPLOAD PHOTOS (NOUVELLE)
+// ==========================================
+
+// 🔧 Fonction d'upload photos avec indicateur de progression
+// 🚀 OPTIMISATION: Upload parallèle avec indicateur de progression
+// À ajouter dans firebaseFunctions.js pour remplacer uploadPhotosToFirebase
+
+export const uploadPhotosToFirebase = async (submissionId, photosList, setUploadProgress = null) => {
+  const uploadedUrls = [];
+  const errors = [];
+  const PARALLEL_UPLOADS = 2; // Nombre d'uploads simultanés
+  
+  console.log(`📸 Début upload parallèle de ${photosList.length} photos (${PARALLEL_UPLOADS} simultanés)...`);
+  
+  // ✅ INITIALISER L'INDICATEUR
+  if (setUploadProgress) {
+    setUploadProgress({
+      visible: true,
+      currentPhoto: 0,
+      totalPhotos: photosList.length,
+      percentage: 0,
+      status: 'Préparation de l\'upload...',
+      errors: [],
+      startTime: Date.now() // Pour estimation temps
+    });
+  }
+  
+  // Fonction pour uploader une seule photo
+  const uploadSinglePhoto = async (photo, index) => {
+    try {
+      // Vérifier si c'est déjà une URL Firebase
+      if (photo.uri && photo.uri.startsWith('https://firebasestorage.googleapis.com')) {
+        console.log(`✅ Photo ${index + 1}: Déjà sur Firebase`);
+        return { success: true, url: photo.uri, index };
+      }
+      
+      if (!photo.uri) {
+        const errorMsg = `Photo ${index + 1}: URI manquante`;
+        console.warn(`⚠️ ${errorMsg}`);
+        return { success: false, error: errorMsg, index };
+      }
+      
+      console.log(`📤 Upload photo ${index + 1}/${photosList.length}...`);
+      
+      const timestamp = Date.now();
+      const randomId = Math.random().toString(36).substring(2, 8);
+      const photoName = `${submissionId}_photo_${index}_${timestamp}_${randomId}.jpg`;
+      const storageRef = ref(storage, `soumissions/${submissionId}/${photoName}`);
+      
+      // Fetch avec timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      
+      const response = await fetch(photo.uri, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const blob = await response.blob();
+      console.log(`📏 Photo ${index + 1} taille: ${(blob.size / 1024 / 1024).toFixed(2)}MB`);
+      
+      if (blob.size > 10 * 1024 * 1024) {
+        const errorMsg = `Photo ${index + 1}: Trop grande (${(blob.size / 1024 / 1024).toFixed(1)}MB)`;
+        return { success: false, error: errorMsg, index };
+      }
+      
+      await uploadBytes(storageRef, blob);
+      const downloadUrl = await getDownloadURL(storageRef);
+      
+      console.log(`✅ Photo ${index + 1} uploadée avec succès`);
+      return { success: true, url: downloadUrl, index };
+      
+    } catch (error) {
+      let errorMsg = `Photo ${index + 1}: ${error.message}`;
+      if (error.name === 'AbortError') {
+        errorMsg += ' (Timeout 30s)';
+      }
+      console.error(`❌ Erreur upload photo ${index + 1}:`, error);
+      return { success: false, error: errorMsg, index };
+    }
+  };
+  
+  // Upload en parallèle par chunks
+  let completedCount = 0;
+  const totalPhotos = photosList.length;
+  
+  for (let i = 0; i < totalPhotos; i += PARALLEL_UPLOADS) {
+    const chunk = photosList.slice(i, i + PARALLEL_UPLOADS);
+    const chunkPromises = chunk.map((photo, chunkIndex) => 
+      uploadSinglePhoto(photo, i + chunkIndex)
+    );
+    
+    // Attendre que toutes les photos du chunk soient terminées
+    const chunkResults = await Promise.allSettled(chunkPromises);
+    
+    // Traiter les résultats
+    chunkResults.forEach((result, chunkIndex) => {
+      const actualIndex = i + chunkIndex;
+      completedCount++;
+      
+      if (result.status === 'fulfilled' && result.value.success) {
+        uploadedUrls.push(result.value.url);
+      } else {
+        const errorMsg = result.status === 'fulfilled' 
+          ? result.value.error 
+          : `Photo ${actualIndex + 1}: Erreur inconnue`;
+        errors.push(errorMsg);
+        
+        // Ajouter erreur à l'indicateur
+        if (setUploadProgress) {
+          setUploadProgress(prev => ({
+            ...prev,
+            errors: [...prev.errors, errorMsg]
+          }));
+        }
+      }
+      
+      // Mettre à jour la progression
+      if (setUploadProgress) {
+        const percentage = Math.round((completedCount / totalPhotos) * 100);
+        const elapsed = Date.now() - (setUploadProgress.startTime || Date.now());
+        const estimatedTotal = (elapsed / completedCount) * totalPhotos;
+        const remaining = Math.max(0, estimatedTotal - elapsed);
+        
+        setUploadProgress(prev => ({
+          ...prev,
+          currentPhoto: completedCount,
+          percentage,
+          status: completedCount < totalPhotos 
+            ? `Upload photo ${completedCount}/${totalPhotos}... (${Math.round(remaining/1000)}s restant)`
+            : `Upload terminé: ${uploadedUrls.length}/${totalPhotos} photos`,
+        }));
+      }
+    });
+  }
+  
+  // ✅ FINALISER L'INDICATEUR
+  if (setUploadProgress) {
+    setTimeout(() => {
+      setUploadProgress(prev => ({ ...prev, visible: false }));
+    }, 2000);
+  }
+  
+  return {
+    uploadedUrls,
+    errors,
+    success: errors.length < photosList.length,
+    stats: {
+      total: photosList.length,
+      uploaded: uploadedUrls.length,
+      failed: errors.length
+    }
+  };
+};
 
 // ==========================================
 // 📄 FONCTIONS SOUMISSIONS (PRINCIPALES)
@@ -565,4 +731,4 @@ export const AVAILABLE_FOLDER_ICONS_MOBILE = [
   'tags'
 ];
 
-console.log('🔥 Firebase Functions Mobile avec IDS UNIQUES initialisées');
+console.log('🔥 Firebase Functions Mobile avec UPLOAD PHOTOS initialisées');

@@ -59,7 +59,8 @@
       [
         "expo-mail-composer",
         {}
-      ]
+      ],
+      "expo-secure-store"
     ],
     "extra": {
       "eas": {
