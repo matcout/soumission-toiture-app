@@ -8,10 +8,9 @@ const firebaseConfig = {
   apiKey: "AIzaSyBfhMUamxx6SDmP5LyQ4XTL95ZZU-GAXPU",
   authDomain: "soumission-toiture-app.firebaseapp.com",
   projectId: "soumission-toiture-app",
-  storageBucket: "gs://soumission-toiture-app.firebasestorage.app",
+  storageBucket: "soumission-toiture-app.firebasestorage.app", // ✅ Retiré le gs://
   messagingSenderId: "1072331437814",
   appId: "1:1072331437814:web:cebd4b13f9a17f85a09ed7"
-  // Note: measurementId retiré (pas nécessaire pour React Native)
 };
 
 // Initialiser Firebase
@@ -47,6 +46,7 @@ export const testFirebaseConnection = () => {
   if (app) {
     console.log('🔥 Firebase initialisé:', app.name);
     console.log('📊 Projet:', firebaseConfig.projectId);
+    console.log('💾 Storage bucket:', firebaseConfig.storageBucket);
     return true;
   }
   return false;

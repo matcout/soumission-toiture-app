@@ -1,41 +1,35 @@
-// centralizedFolderSystem.js - Système de Dossiers Centralisé Firebase
-// 🔥 REMPLACE les DEFAULT_FOLDERS hardcodées par une gestion centralisée
-
+// centralizedFolderSystem.js - Version modifiée SANS dossier Terminées
 import { 
   collection, 
-  doc, 
-  setDoc, 
   getDocs, 
   query, 
-  where, 
   orderBy,
-  serverTimestamp,
-  writeBatch
+  doc,
+  setDoc,
+  serverTimestamp
 } from 'firebase/firestore';
 import { db } from './firebase';
 
-// 🏗️ CONFIGURATION SYSTÈME CENTRALISÉE
-const SYSTEM_FOLDER_TEMPLATES = {
-  assignments: {
+// Configuration des dossiers système (SANS Terminées)
+const SYSTEM_FOLDERS = {
+  system_assignments: {
     id: 'system_assignments',
     label: 'Aller prendre mesure',
-    icon: 'clipboard-list', // FontAwesome5 format (sera converti selon plateforme)
+    icon: 'clipboard-list',
     color: '#3b82f6',
     order: 0,
     level: 0,
     parentId: null,
     isSystemFolder: true,
     isDeletable: false,
-    isEditable: true, // On peut modifier le nom/couleur mais pas supprimer
+    isEditable: true,
     filterConfig: {
       type: 'status',
       value: 'assignment',
       logic: 'equals'
-    },
-    description: 'Dossier système pour les assignments à effectuer sur le terrain'
+    }
   },
-  
-  pending: {
+  system_pending: {
     id: 'system_pending',
     label: 'À compléter',
     icon: 'clock',
@@ -50,281 +44,114 @@ const SYSTEM_FOLDER_TEMPLATES = {
       type: 'status',
       value: 'captured',
       logic: 'equals'
-    },
-    description: 'Soumissions capturées qui nécessitent des calculs'
+    }
   },
-  
-  completed: {
-    id: 'system_completed',
-    label: 'Terminées',
-    icon: 'check-circle',
-    color: '#10b981',
-    order: 2,
-    level: 0,
-    parentId: null,
-    isSystemFolder: true,
-    isDeletable: false,
-    isEditable: true,
-    filterConfig: {
-      type: 'status',
-      value: 'completed',
-      logic: 'equals'
-    },
-    description: 'Soumissions complètement terminées'
-  },
-  
-  project2025: {
+  system_project2025: {
     id: 'system_project2025',
     label: 'Projet 2025',
     icon: 'folder-open',
     color: '#059669',
-    order: 3,
-    level: 0,
-    parentId: null,
-    isSystemFolder: true,
-    isDeletable: false,
-    isEditable: true,
-    isExpandable: true,
-    filterConfig: {
-      type: 'complex',
-      conditions: [
-        { field: 'year', value: '2025', logic: 'equals' },
-        { field: 'status', value: 'completed', logic: 'equals' }
-      ],
-      logic: 'AND'
-    },
-    description: 'Projet principal pour l\'année 2025'
-  },
-  
-  contracts2025: {
-    id: 'system_contracts2025',
-    label: 'Contrats',
-    icon: 'file-contract',
-    color: '#8b5cf6',
-    order: 0,
-    level: 1,
-    parentId: 'system_project2025',
-    isSystemFolder: true,
-    isDeletable: false,
-    isEditable: true,
-    filterConfig: {
-      type: 'complex',
-      conditions: [
-        { field: 'category', value: 'contrats', logic: 'equals' },
-        { field: 'year', value: '2025', logic: 'equals' }
-      ],
-      logic: 'AND'
-    },
-    description: 'Contrats signés pour 2025'
-  },
-  
-  submissions2025: {
-    id: 'system_submissions2025',
-    label: 'Soumissions',
-    icon: 'clipboard-list',
-    color: '#3b82f6',
-    order: 1,
-    level: 1,
-    parentId: 'system_project2025',
-    isSystemFolder: true,
-    isDeletable: false,
-    isEditable: true,
-    filterConfig: {
-      type: 'complex',
-      conditions: [
-        { field: 'category', value: 'soumissions', logic: 'equals' },
-        { field: 'year', value: '2025', logic: 'equals' }
-      ],
-      logic: 'AND'
-    },
-    description: 'Soumissions en cours pour 2025'
-  },
-  
-  realized2025: {
-    id: 'system_realized2025',
-    label: 'Réalisé',
-    icon: 'check-circle',
-    color: '#10b981',
     order: 2,
-    level: 1,
-    parentId: 'system_project2025',
-    isSystemFolder: true,
-    isDeletable: false,
-    isEditable: true,
-    filterConfig: {
-      type: 'complex',
-      conditions: [
-        { field: 'category', value: 'realiser', logic: 'equals' },
-        { field: 'year', value: '2025', logic: 'equals' }
-      ],
-      logic: 'AND'
-    },
-    description: 'Projets réalisés en 2025'
-  },
-  
-  inspections2025: {
-    id: 'system_inspections2025',
-    label: 'Inspections',
-    icon: 'search',
-    color: '#6366f1',
-    order: 3,
-    level: 1,
-    parentId: 'system_project2025',
-    isSystemFolder: true,
-    isDeletable: false,
-    isEditable: true,
-    filterConfig: {
-      type: 'complex',
-      conditions: [
-        { field: 'category', value: 'inspections', logic: 'equals' },
-        { field: 'year', value: '2025', logic: 'equals' }
-      ],
-      logic: 'AND'
-    },
-    description: 'Inspections programmées pour 2025'
-  },
-  
-  repairs2025: {
-    id: 'system_repairs2025',
-    label: 'Réparations',
-    icon: 'tools',
-    color: '#f59e0b',
-    order: 4,
-    level: 1,
-    parentId: 'system_project2025',
-    isSystemFolder: true,
-    isDeletable: false,
-    isEditable: true,
-    filterConfig: {
-      type: 'complex',
-      conditions: [
-        { field: 'category', value: 'reparations', logic: 'equals' },
-        { field: 'year', value: '2025', logic: 'equals' }
-      ],
-      logic: 'AND'
-    },
-    description: 'Réparations à effectuer en 2025'
-  },
-  
-  project2024: {
-    id: 'system_project2024',
-    label: 'Projet 2024',
-    icon: 'folder',
-    color: '#6b7280',
-    order: 4,
     level: 0,
     parentId: null,
-    isSystemFolder: true,
-    isDeletable: false,
+    isSystemFolder: false, // N'est pas vraiment système
+    isDeletable: true,
     isEditable: true,
     isExpandable: true,
-    filterConfig: {
-      type: 'simple',
-      field: 'year',
-      value: '2024',
-      logic: 'equals'
-    },
-    description: 'Archive des projets 2024'
-  },
-  
-  contracts2024: {
-    id: 'system_contracts2024',
-    label: 'Contrats 2024',
-    icon: 'file-contract',
-    color: '#6b7280',
-    order: 0,
-    level: 1,
-    parentId: 'system_project2024',
-    isSystemFolder: true,
-    isDeletable: false,
-    isEditable: true,
-    filterConfig: {
-      type: 'complex',
-      conditions: [
-        { field: 'category', value: 'contrats', logic: 'equals' },
-        { field: 'year', value: '2024', logic: 'equals' }
-      ],
-      logic: 'AND'
-    },
-    description: 'Contrats de l\'année 2024'
+    filterConfig: null
   }
 };
 
-// 🚀 FONCTION PRINCIPALE D'INITIALISATION
-export const initializeCentralizedFolders = async (platform = 'mobile') => {
+// Sous-dossier Soumissions pour Projet 2025
+const SOUMISSIONS_SUBFOLDER = {
+  id: 'projet_2025_soumissions',
+  label: 'Soumissions',
+  icon: 'file-text',
+  color: '#059669',
+  order: 0,
+  level: 1,
+  parentId: 'system_project2025',
+  isSystemFolder: false,
+  isDeletable: false, // Protégé car requis pour les soumissions terminées
+  isEditable: true,
+  filterConfig: null
+};
+
+// Initialiser le système centralisé
+export const initializeCentralizedFolders = async (platform = 'desktop') => {
   try {
-    console.log(`🔥 Initialisation dossiers centralisés depuis ${platform}...`);
+    console.log(`🔥 Initialisation système centralisé ${platform}...`);
     
-    // 1️⃣ Vérifier si les dossiers système existent déjà
-    const existingSystemFolders = await getSystemFolders();
+    // Récupérer tous les dossiers depuis Firebase
+    const folders = await getAllCentralizedFolders();
     
-    if (existingSystemFolders.length === 0) {
-      console.log('📁 Première installation - Création structure système...');
-      await createSystemFolders(platform);
-    } else {
-      console.log(`✅ Structure système existante (${existingSystemFolders.length} dossiers)`);
+    // Si aucun dossier, créer la structure par défaut
+    if (folders.length === 0) {
+      console.log('📁 Création structure système...');
+      
+      // Créer les dossiers système
+      for (const [id, folder] of Object.entries(SYSTEM_FOLDERS)) {
+        await createSystemFolder(folder, platform);
+      }
+      
+      // Créer le sous-dossier Soumissions
+      await createSystemFolder(SOUMISSIONS_SUBFOLDER, platform);
+      
+      // Récupérer à nouveau après création
+      const newFolders = await getAllCentralizedFolders();
+      return {
+        success: true,
+        folders: newFolders,
+        isFirstInit: true
+      };
     }
     
-    // 2️⃣ Récupérer TOUS les dossiers (système + utilisateur)
-    const allFolders = await getAllCentralizedFolders();
+    // Vérifier si le sous-dossier Soumissions existe
+    const hasSubmissionsFolder = folders.some(f => f.id === 'projet_2025_soumissions');
+    if (!hasSubmissionsFolder) {
+      console.log('📁 Création du sous-dossier Soumissions...');
+      await createSystemFolder(SOUMISSIONS_SUBFOLDER, platform);
+    }
     
-    console.log(`📋 ${allFolders.length} dossiers chargés depuis Firebase`);
     return {
       success: true,
-      folders: allFolders,
-      isFirstInit: existingSystemFolders.length === 0
+      folders: folders,
+      isFirstInit: false
     };
     
   } catch (error) {
-    console.error('❌ Erreur initialisation centralisée:', error);
+    console.error('❌ Erreur initialisation:', error);
+    // Retourner les dossiers par défaut en cas d'erreur
     return {
-      success: false,
-      error: error.message,
-      folders: []
+      success: true,
+      folders: Object.values(SYSTEM_FOLDERS),
+      isFirstInit: true,
+      offline: true
     };
   }
 };
 
-// 📁 CRÉER LA STRUCTURE SYSTÈME DANS FIREBASE
-const createSystemFolders = async (platform) => {
-  const batch = writeBatch(db);
-  
+// Créer un dossier système
+const createSystemFolder = async (folderData, platform) => {
   try {
-    const folderEntries = Object.entries(SYSTEM_FOLDER_TEMPLATES);
-    
-    for (const [key, folderTemplate] of folderEntries) {
-      const folderData = {
-        ...folderTemplate,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        createdBy: platform,
-        platform: platform,
-        syncedAt: serverTimestamp(),
-        version: '1.0.0'
-      };
-      
-      const docRef = doc(db, 'folders', folderTemplate.id);
-      batch.set(docRef, folderData);
-      
-      console.log(`📂 Préparation dossier système: ${folderTemplate.label}`);
-    }
-    
-    // Exécuter le batch
-    await batch.commit();
-    console.log('✅ Structure système créée avec succès !');
-    
+    const docRef = doc(db, 'folders', folderData.id);
+    await setDoc(docRef, {
+      ...folderData,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      platform: platform
+    }, { merge: true }); // Utiliser merge pour éviter d'écraser
+    console.log(`✅ Dossier créé: ${folderData.label}`);
   } catch (error) {
-    console.error('❌ Erreur création structure système:', error);
-    throw error;
+    console.error(`❌ Erreur création dossier ${folderData.label}:`, error);
   }
 };
 
-// 📋 RÉCUPÉRER TOUS LES DOSSIERS CENTRALISÉS
+// Récupérer tous les dossiers
 export const getAllCentralizedFolders = async () => {
   try {
     const q = query(
       collection(db, 'folders'),
-      orderBy('level', 'asc'),
       orderBy('order', 'asc')
     );
     
@@ -332,164 +159,64 @@ export const getAllCentralizedFolders = async () => {
     const folders = [];
     
     querySnapshot.forEach((doc) => {
-      const data = doc.data();
       folders.push({
         id: doc.id,
-        ...data,
-        createdAt: data.createdAt?.toDate() || new Date(),
-        updatedAt: data.updatedAt?.toDate() || new Date()
+        ...doc.data()
       });
     });
     
     return folders;
     
   } catch (error) {
-    console.error('❌ Erreur récupération dossiers centralisés:', error);
-    return [];
+    console.error('❌ Erreur récupération dossiers:', error);
+    // Retourner les dossiers par défaut
+    return Object.values(SYSTEM_FOLDERS);
   }
 };
 
-// 🔍 RÉCUPÉRER SEULEMENT LES DOSSIERS SYSTÈME
-export const getSystemFolders = async () => {
-  try {
-    const q = query(
-      collection(db, 'folders'),
-      where('isSystemFolder', '==', true),
-      orderBy('order', 'asc')
-    );
-    
-    const querySnapshot = await getDocs(q);
-    const systemFolders = [];
-    
-    querySnapshot.forEach((doc) => {
-      systemFolders.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
-    
-    return systemFolders;
-    
-  } catch (error) {
-    console.error('❌ Erreur récupération dossiers système:', error);
-    return [];
-  }
-};
-
-// 🔄 APPLIQUER LES FILTRES AUX SOUMISSIONS
+// Appliquer les filtres
 export const applyFolderFilter = (folder, submissions) => {
-  if (!folder.filterConfig || !submissions || submissions.length === 0) {
+  if (!folder || !submissions) {
     return [];
   }
   
-  const { filterConfig } = folder;
-  
-  if (filterConfig.type === 'simple') {
-    // Filtre simple : field = value
-    return submissions.filter(submission => {
-      const fieldValue = getNestedValue(submission, filterConfig.field);
-      return compareValues(fieldValue, filterConfig.value, filterConfig.logic);
-    });
-  }
-  
-  if (filterConfig.type === 'complex') {
-    // Filtre complexe : multiple conditions avec AND/OR
-    return submissions.filter(submission => {
-      const results = filterConfig.conditions.map(condition => {
-        const fieldValue = getNestedValue(submission, condition.field);
-        return compareValues(fieldValue, condition.value, condition.logic);
-      });
-      
-      // Appliquer la logique AND/OR
-      return filterConfig.logic === 'AND' 
-        ? results.every(result => result)
-        : results.some(result => result);
-    });
-  }
-  
-  if (filterConfig.type === 'status') {
-    // Filtre de statut (legacy support)
-    return submissions.filter(submission => 
-      submission.status === filterConfig.value
+  // Gérer le filtre pour le sous-dossier Soumissions (reçoit les complétées)
+  if (folder.id === 'projet_2025_soumissions') {
+    return submissions.filter(s => 
+      s.folderId === 'projet_2025_soumissions' || 
+      s.status === 'completed'
     );
   }
   
-  return [];
-};
-
-// 🛠️ FONCTIONS UTILITAIRES
-const getNestedValue = (obj, path) => {
-  return path.split('.').reduce((current, key) => {
-    return current && current[key] !== undefined ? current[key] : null;
-  }, obj);
-};
-
-const compareValues = (fieldValue, targetValue, logic) => {
-  switch (logic) {
-    case 'equals':
-      return fieldValue === targetValue;
-    case 'contains':
-      return fieldValue && fieldValue.toString().toLowerCase().includes(targetValue.toLowerCase());
-    case 'startsWith':
-      return fieldValue && fieldValue.toString().toLowerCase().startsWith(targetValue.toLowerCase());
-    case 'exists':
-      return fieldValue !== null && fieldValue !== undefined;
-    case 'notExists':
-      return fieldValue === null || fieldValue === undefined;
-    default:
-      return false;
+  // Gérer les filtres des dossiers système
+  if (folder.filterConfig) {
+    const { filterConfig } = folder;
+    
+    if (filterConfig.type === 'status') {
+      return submissions.filter(s => s.status === filterConfig.value);
+    }
   }
+  
+  // Pour les autres dossiers, filtrer par folderId
+  return submissions.filter(s => s.folderId === folder.id);
 };
 
-// 🎛️ FONCTION POUR ADMIN/CONFIGURATION AVANCÉE
-export const updateSystemFolderConfig = async (folderId, updates, platform) => {
-  try {
-    const folderRef = doc(db, 'folders', folderId);
-    
-    const updateData = {
-      ...updates,
-      updatedAt: serverTimestamp(),
-      lastModifiedBy: platform,
-      syncedAt: serverTimestamp()
-    };
-    
-    await updateDoc(folderRef, updateData);
-    
-    console.log(`✅ Configuration dossier ${folderId} mise à jour`);
-    return { success: true };
-    
-  } catch (error) {
-    console.error('❌ Erreur mise à jour config dossier:', error);
-    return { success: false, error: error.message };
-  }
+// Obtenir le dossier cible pour les soumissions complétées
+export const getCompletedSubmissionsFolder = () => {
+  return 'projet_2025_soumissions';
 };
 
-// 📊 STATISTIQUES DES DOSSIERS
-export const getFolderStats = async () => {
-  try {
-    const allFolders = await getAllCentralizedFolders();
-    
-    const stats = {
-      total: allFolders.length,
-      system: allFolders.filter(f => f.isSystemFolder).length,
-      user: allFolders.filter(f => !f.isSystemFolder).length,
-      levels: Math.max(...allFolders.map(f => f.level || 0)) + 1
-    };
-    
-    return { success: true, stats };
-    
-  } catch (error) {
-    console.error('❌ Erreur stats dossiers:', error);
-    return { success: false, error: error.message };
-  }
+// Vérifier si un dossier est système
+export const isSystemFolder = (folderId) => {
+  return SYSTEM_FOLDERS.hasOwnProperty(folderId) && 
+         SYSTEM_FOLDERS[folderId].isSystemFolder === true;
 };
 
-console.log('🔥 Système de Dossiers Centralisé Firebase initialisé');
 export default {
   initializeCentralizedFolders,
   getAllCentralizedFolders,
-  getSystemFolders,
   applyFolderFilter,
-  updateSystemFolderConfig,
-  getFolderStats
+  getCompletedSubmissionsFolder,
+  isSystemFolder,
+  SYSTEM_FOLDERS
 };
