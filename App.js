@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { FontAwesome5 } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Imports Firebase et synchronisation
 import { subscribeToSubmissions, createAssignment, updateSubmissionStatus, deleteSubmissionFromFirebase } from './firebaseFunctions';
@@ -23,6 +24,7 @@ import { testFirebaseConnection } from './firebase';
 // Imports composants
 import SoumissionForm from './components/SoumissionForm';
 import AssignmentModal from './AssignmentModal';
+import SubmissionViewer from './components/SubmissionViewer';
 
 export default function App() {
   // États principaux
@@ -40,6 +42,8 @@ export default function App() {
   // États UI
   const [expandedFolders, setExpandedFolders] = useState(['system_project2025', 'projet_2025', 'Projet 2025']); // Toutes les variantes possibles
   const [showAssignmentModal, setShowAssignmentModal] = useState(false);
+  const [showSubmissionViewer, setShowSubmissionViewer] = useState(false);
+  const [viewerSubmission, setViewerSubmission] = useState(null);
 
   // Initialisation et synchronisation
   useEffect(() => {
@@ -182,29 +186,32 @@ export default function App() {
     setCurrentView('form');
   };
 
-// 🗺️ NOUVELLE FONCTION - Ouvrir Google Maps sur mobile
- const openAddressInMaps = (address) => {
-  if (!address || !address.trim()) {
-    Alert.alert('Navigation', 'Aucune adresse disponible pour la navigation');
-    return;
-  }
-  
-  const encodedAddress = encodeURIComponent(address.trim());
-  
-  // ✅ TOUJOURS Google Maps web (fonctionne à 100%)
-  const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
-  
-  Linking.openURL(googleMapsUrl)
-    .then(() => {
-      console.log('🗺️ Google Maps ouvert');
-    })
-    .catch((error) => {
-      console.error('❌ Erreur ouverture Google Maps:', error);
-      Alert.alert('Erreur', 'Impossible d\'ouvrir Google Maps');
-    });
-};
+  const handleOpenViewer = (submission) => {
+    setViewerSubmission(submission);
+    setShowSubmissionViewer(true);
+  };
 
-
+  // 🗺️ NOUVELLE FONCTION - Ouvrir Google Maps sur mobile
+  const openAddressInMaps = (address) => {
+    if (!address || !address.trim()) {
+      Alert.alert('Navigation', 'Aucune adresse disponible pour la navigation');
+      return;
+    }
+    
+    const encodedAddress = encodeURIComponent(address.trim());
+    
+    // ✅ TOUJOURS Google Maps web (fonctionne à 100%)
+    const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+    
+    Linking.openURL(googleMapsUrl)
+      .then(() => {
+        console.log('🗺️ Google Maps ouvert');
+      })
+      .catch((error) => {
+        console.error('❌ Erreur ouverture Google Maps:', error);
+        Alert.alert('Erreur', 'Impossible d\'ouvrir Google Maps');
+      });
+  };
 
   // Retour au dashboard
   const handleBackToDashboard = () => {
@@ -394,18 +401,10 @@ export default function App() {
     );
   };
 
-
-
-
-
-
-
   // Dashboard principal
   const renderDashboard = () => {
     const currentFolder = folders[selectedFolder];
     const filteredSubmissions = getFilteredSubmissions();
-    
-
     
     return (
       <SafeAreaView style={styles.container}>
@@ -427,8 +426,51 @@ export default function App() {
         <View style={styles.newButtonContainer}>
           <TouchableOpacity
             style={styles.newButton}
-            onPress={() => {
+            onPress={async () => {
               setPreviousView('dashboard');
+              
+              try {
+                // Vérifier s'il y a un brouillon
+                const draftString = await AsyncStorage.getItem('SOUMISSION_DRAFT');
+                if (draftString) {
+                  const draft = JSON.parse(draftString);
+                  const hasData = draft.formData?.nom || draft.formData?.adresse || 
+                                 draft.formData?.telephone || draft.formData?.courriel || 
+                                 draft.formData?.notes || draft.photos?.length > 0;
+                  
+                  if (hasData) {
+                    Alert.alert(
+                      'Brouillon trouvé',
+                      'Un brouillon de soumission a été trouvé. Voulez-vous le restaurer ?',
+                      [
+                        {
+                          text: 'Non, nouveau',
+                          style: 'cancel',
+                          onPress: () => {
+                            // Naviguer sans charger le brouillon
+                            global.skipDraftLoad = true;
+                            handleNavigateToForm();
+                          }
+                        },
+                        {
+                          text: 'Oui, restaurer',
+                          style: 'default',
+                          onPress: () => {
+                            // Naviguer et charger le brouillon
+                            global.skipDraftLoad = false;
+                            handleNavigateToForm();
+                          }
+                        }
+                      ]
+                    );
+                    return;
+                  }
+                }
+              } catch (error) {
+                console.error('Erreur vérification brouillon:', error);
+              }
+              
+              // Pas de brouillon, navigation normale
               handleNavigateToForm();
             }}
           >
@@ -647,129 +689,131 @@ export default function App() {
               
               const photoCount = submission.photos?.length || 0;
               
-
-
-
-
               return (
-         <View
-  key={submission.id}
-  style={styles.assignmentCard}
->
-  {/* Wrapper pour le longPress */}
-  <TouchableOpacity
-    style={styles.cardTouchable}
-    onPress={() => {
-      setPreviousView('folderView');
-      handleNavigateToForm(submission);
-    }}
-    onLongPress={() => {
-      Alert.alert(
-        'Options',
-        submission.client?.adresse || submission.displayName || 'Cette soumission',
-        [
-          { text: 'Annuler', style: 'cancel' },
-          { 
-            text: 'Modifier', 
-            onPress: () => {
-              setPreviousView('folderView');
-              handleNavigateToForm(submission);
-            }
-          },
-          {
-            text: 'Supprimer',
-            style: 'destructive',
-            onPress: () => handleDeleteSubmission(
-              submission.id, 
-              submission.client?.adresse || submission.displayName || 'cette soumission'
-            )
-          }
-        ]
-      );
-    }}
-    delayLongPress={500} // 500ms pour déclencher le longPress
-    activeOpacity={0.7}
-  >
-    
-    {/* En-tête avec adresse et boutons */}
-    <View style={styles.cardHeader}>
-      <View style={styles.addressRow}>
-        <FontAwesome5 name="home" size={14} color="#3498db" />
-        <Text style={styles.cardAddress} numberOfLines={1}>
-          {submission.client?.adresse || submission.displayName || 'Adresse inconnue'}
-        </Text>
-      </View>
-      
-      {/* Boutons d'action à droite */}
-      <View style={styles.rightActions}>
-        <TouchableOpacity 
-          onPress={(e) => {
-            e.stopPropagation(); // Empêche le onPress de la carte
-            openAddressInMaps(submission.client?.adresse || submission.displayName);
-          }}
-          style={[
-            styles.mapsButton,
-            { opacity: (submission.client?.adresse || submission.displayName) ? 1 : 0.5 }
-          ]}
-          disabled={!submission.client?.adresse && !submission.displayName}
-        >
-          <FontAwesome5 name="map-marker-alt" size={14} color="white" />
-        </TouchableOpacity>
-        
-      
-        
-        <View style={[
-          styles.statusBadgeNew, 
-          isPending && styles.pendingBadge,
-          isCompleted && styles.completedBadge
-        ]}>
-          <Text style={[
-            styles.statusTextNew,
-            isCompleted && { color: 'white' }
-          ]}>
-            {submission.status === 'assignment' ? 'Assignment' : 
-             submission.status === 'completed' ? 'Complétée' : 'À compléter'}
-          </Text>
-        </View>
-      </View>
-    </View>
-                  
-                  {/* Nom du client */}
-                  {submission.client?.nom && (
-                    <Text style={styles.cardClient}>Client: {submission.client.nom}</Text>
-                  )}
-                  
-                  {/* Superficie et photos */}
-                  <View style={styles.detailsRow}>
-                    <View style={styles.detailItem}>
-                      <FontAwesome5 name="ruler-combined" size={12} color="#666" />
-                      <Text style={styles.detailText}>Superficie: {getSuperficie().toFixed(0)} pi²</Text>
+                <View
+                  key={submission.id}
+                  style={styles.assignmentCard}
+                >
+                  {/* Wrapper pour le longPress SANS onPress pour éviter le conflit */}
+                  <TouchableOpacity
+                    style={styles.cardTouchable}
+                    onLongPress={() => {
+                      Alert.alert(
+                        'Options',
+                        submission.client?.adresse || submission.displayName || 'Cette soumission',
+                        [
+                          { text: 'Annuler', style: 'cancel' },
+                          { 
+                            text: 'Modifier', 
+                            onPress: () => {
+                              setPreviousView('folderView');
+                              handleNavigateToForm(submission);
+                            }
+                          },
+                          {
+                            text: 'Supprimer',
+                            style: 'destructive',
+                            onPress: () => handleDeleteSubmission(
+                              submission.id, 
+                              submission.client?.adresse || submission.displayName || 'cette soumission'
+                            )
+                          }
+                        ]
+                      );
+                    }}
+                    delayLongPress={500}
+                    activeOpacity={1} // Pas d'effet visuel sur le tap simple
+                  >
+                    
+                    {/* En-tête avec adresse et boutons */}
+                    <View style={styles.cardHeader}>
+                      <View style={styles.addressRow}>
+                        <FontAwesome5 name="home" size={14} color="#3498db" />
+                        <Text style={styles.cardAddress} numberOfLines={1}>
+                          {submission.client?.adresse || submission.displayName || 'Adresse inconnue'}
+                        </Text>
+                      </View>
+                      
+                      {/* Boutons d'action à droite */}
+                      <View style={styles.rightActions}>
+                        <TouchableOpacity 
+                          onPress={(e) => {
+                            e.stopPropagation(); // Empêche la propagation
+                            openAddressInMaps(submission.client?.adresse || submission.displayName);
+                          }}
+                          style={[
+                            styles.mapsButton,
+                            { opacity: (submission.client?.adresse || submission.displayName) ? 1 : 0.5 }
+                          ]}
+                          disabled={!submission.client?.adresse && !submission.displayName}
+                        >
+                          <FontAwesome5 name="map-marker-alt" size={14} color="white" />
+                        </TouchableOpacity>
+                        
+                        <View style={[
+                          styles.statusBadgeNew, 
+                          isPending && styles.pendingBadge,
+                          isCompleted && styles.completedBadge
+                        ]}>
+                          <Text style={[
+                            styles.statusTextNew,
+                            isCompleted && { color: 'white' }
+                          ]}>
+                            {submission.status === 'assignment' ? 'Assignment' : 
+                             submission.status === 'completed' ? 'Complétée' : 'À compléter'}
+                          </Text>
+                        </View>
+                      </View>
                     </View>
-                    <View style={styles.detailItem}>
-                      <FontAwesome5 name="camera" size={12} color="#666" />
-                      <Text style={styles.detailText}>Photos: {photoCount}</Text>
+                    
+                    {/* Nom du client */}
+                    {submission.client?.nom && (
+                      <Text style={styles.cardClient}>Client: {submission.client.nom}</Text>
+                    )}
+                    
+                    {/* Superficie et photos */}
+                    <View style={styles.detailsRow}>
+                      <View style={styles.detailItem}>
+                        <FontAwesome5 name="ruler-combined" size={12} color="#666" />
+                        <Text style={styles.detailText}>Superficie: {getSuperficie().toFixed(0)} pi²</Text>
+                      </View>
+                      <View style={styles.detailItem}>
+                        <FontAwesome5 name="camera" size={12} color="#666" />
+                        <Text style={styles.detailText}>Photos: {photoCount}</Text>
+                      </View>
                     </View>
-                  </View>
+                    
+                    {/* Notes si présentes */}
+                    {submission.notes && (
+                      <View style={styles.notesContainer}>
+                        <Text style={styles.notesTitle}>Notes:</Text>
+                        <Text style={styles.notesText} numberOfLines={2}>{submission.notes}</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
                   
-                  {/* Notes si présentes */}
-                  {submission.notes && (
-                    <View style={styles.notesContainer}>
-                      <Text style={styles.notesTitle}>Notes:</Text>
-                      <Text style={styles.notesText} numberOfLines={2}>{submission.notes}</Text>
-                    </View>
-                  )}
-                  
-                  {/* Boutons Voir et Calculer */}
+                  {/* Boutons Voir/Mesurer et Calculer - EN DEHORS du TouchableOpacity */}
                   <View style={styles.actionButtons}>
                     <TouchableOpacity 
                       style={[styles.actionButton, styles.viewButton]}
                       onPress={() => {
-                        setPreviousView('folderView');
-                        handleNavigateToForm(submission);
+                        console.log('🎯 Bouton Voir/Mesurer cliqué - Dossier:', selectedFolder);
+                        
+                        if (selectedFolder === 'system_assignments') {
+                          // Pour "Aller prendre mesure", on navigue vers le formulaire
+                          setPreviousView('folderView');
+                          handleNavigateToForm(submission);
+                        } else {
+                          // Pour TOUS les autres dossiers, on ouvre le viewer
+                          console.log('✅ Ouverture du SubmissionViewer');
+                          handleOpenViewer(submission);
+                        }
                       }}
                     >
                       <FontAwesome5 name="eye" size={14} color="#374151" />
-                      <Text style={styles.buttonText}>Voir</Text>
+                      <Text style={styles.buttonText}>
+                        {selectedFolder === 'system_assignments' ? 'Mesurer' : 'Voir'}
+                      </Text>
                     </TouchableOpacity>
                     
                     {isPending && selectedFolder !== 'projet_2025_soumissions' && (
@@ -788,15 +832,31 @@ export default function App() {
                       </TouchableOpacity>
                     )}
                   </View>
-  </TouchableOpacity>
                   
                 </View>
-                
               );
             })
           )}
         </ScrollView>
         
+        {/* MODAL SUBMISSION VIEWER - AJOUT ICI */}
+        {showSubmissionViewer && viewerSubmission && (
+          <Modal
+            visible={showSubmissionViewer}
+            animationType="slide"
+            onRequestClose={() => setShowSubmissionViewer(false)}
+          >
+            <SubmissionViewer
+              submission={viewerSubmission}
+              onBack={() => {
+                setShowSubmissionViewer(false);
+                setViewerSubmission(null);
+              }}
+            />
+          </Modal>
+        )}
+        
+        {/* Modal Assignment */}
         {canCreateNew && (
           <AssignmentModal
             visible={showAssignmentModal}
@@ -1173,10 +1233,20 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 16,
   },
+  cardTouchable: {
+    flex: 1,
+  },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 8,
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 10,
   },
   cardAddress: {
     fontSize: 16,
@@ -1184,7 +1254,24 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     marginLeft: 8,
     flex: 1,
-    marginRight: 8,
+  },
+  rightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  mapsButton: {
+    backgroundColor: '#27ae60',
+    borderRadius: 20,
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
   cardClient: {
     fontSize: 14,
@@ -1201,7 +1288,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FEF3C7',
   },
   completedBadge: {
-    backgroundColor: '#10B981', // Vert pour les complétées
+    backgroundColor: '#10B981',
   },
   statusTextNew: {
     fontSize: 11,
@@ -1317,56 +1404,4 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontStyle: 'italic',
   },
-
-   addressTouchable: {
-    flex: 1,
-    marginRight: 10,
-  },
-  addressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
- cardHeader: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  justifyContent: 'space-between', // Pour espacer gauche et droite
-  marginBottom: 8,
-},
-
-addressRow: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  flex: 1, // Prend l'espace disponible
-  marginRight: 10,
-},
-
-cardAddress: {
-  fontSize: 16,
-  fontWeight: 'bold',
-  color: '#ffffff',
-  marginLeft: 8,
-  flex: 1,
-},
-
-rightActions: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 8, // Espacement entre bouton Maps et badge
-},
-
-mapsButton: {
-  backgroundColor: '#27ae60',
-  borderRadius: 20, // Cercle parfait
-  width: 36,
-  height: 36,
-  justifyContent: 'center',
-  alignItems: 'center',
-  shadowColor: '#000',
-  shadowOffset: { width: 0, height: 2 },
-  shadowOpacity: 0.25,
-  shadowRadius: 3.84,
-  elevation: 5,
-},
-  
 });

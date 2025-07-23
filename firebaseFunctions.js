@@ -26,6 +26,36 @@ import {
 import { db, storage } from './firebase'; // ✅ Importer storage aussi
 
 // ==========================================
+// 🗂️ MAPPING DES NOMS DE DOSSIERS
+// ==========================================
+
+// Mapper les noms de dossiers standards pour la compatibilité
+const FOLDER_NAME_MAPPING = {
+  'contrat': ['contrat', 'contrats', 'contract', 'contracts'],
+  'realise': ['réalisé', 'realise', 'réalisés', 'terminé', 'terminés', 'completed'],
+  'inspection': ['inspection', 'inspections'],
+  'reparation': ['réparation', 'reparations', 'reparation', 'repairs']
+};
+
+// Fonction pour normaliser les noms de dossiers
+const normalizeFolderName = (name) => {
+  if (!name) return '';
+  
+  const normalized = name.toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // Retirer les accents
+    .trim();
+  
+  // Chercher dans le mapping
+  for (const [key, variations] of Object.entries(FOLDER_NAME_MAPPING)) {
+    if (variations.includes(normalized)) {
+      return key;
+    }
+  }
+  return normalized;
+};
+
+// ==========================================
 // 📸 FONCTION UPLOAD PHOTOS (NOUVELLE)
 // ==========================================
 
@@ -199,19 +229,27 @@ export const subscribeToSubmissions = (callback) => {
     
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const submissions = [];
-      const seenIds = new Set(); // Pour éviter les doublons
+      const seenIds = new Set();
       
       querySnapshot.forEach((doc) => {
-        // Vérifier si on a déjà vu cet ID
         if (!seenIds.has(doc.id)) {
           seenIds.add(doc.id);
           const data = doc.data();
-          submissions.push({
+          
+          // Ajouter le nom de dossier normalisé si présent
+          const submission = {
             id: doc.id,
             ...data,
             createdAt: data.createdAt?.toDate() || new Date(),
             updatedAt: data.updatedAt?.toDate() || new Date()
-          });
+          };
+          
+          // Si la soumission a un folderName, ajouter la version normalisée
+          if (data.folderName) {
+            submission.folderNameNormalized = normalizeFolderName(data.folderName);
+          }
+          
+          submissions.push(submission);
         }
       });
       
@@ -730,5 +768,8 @@ export const AVAILABLE_FOLDER_ICONS_MOBILE = [
   'tag',
   'tags'
 ];
+
+// Exporter la fonction pour utilisation dans App.js
+export { normalizeFolderName };
 
 console.log('🔥 Firebase Functions Mobile avec UPLOAD PHOTOS initialisées');

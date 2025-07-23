@@ -20,7 +20,6 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { saveSubmissionToFirebase, updateSubmissionInFirebase, uploadPhotosToFirebase } from '../firebaseFunctions';
-import RNPickerSelect from 'react-native-picker-select';
 import { StatusBar } from 'expo-status-bar';
 import { FontAwesome5 } from '@expo/vector-icons';
 import CustomCamera from '../CustomCamera';
@@ -122,11 +121,6 @@ const createSafeSubmission = (formData, superficie, date, photos) => {
   };
 };
 
-
-
-
-
-
 const { width } = Dimensions.get('window');
 
 // Constantes pour l'auto-save
@@ -201,8 +195,6 @@ const ImageViewerComponent = ({ photos, initialIndex, onClose }) => {
     </Modal>
   );
 };
-
-
 
 const UploadProgressModal = ({ uploadProgress, setUploadProgress }) => {
   const [animatedWidth] = useState(new Animated.Value(0));
@@ -391,7 +383,6 @@ const UploadProgressModal = ({ uploadProgress, setUploadProgress }) => {
 };
 
 const SoumissionForm = ({ prefilledData = null, onReturn, onComplete }) => {
-  const pickerRefs = useRef({});
   const autoSaveTimerRef = useRef(null);
   const isRestoringRef = useRef(false);
   
@@ -403,9 +394,9 @@ const SoumissionForm = ({ prefilledData = null, onReturn, onComplete }) => {
     adresse: prefilledData?.client?.adresse || '',
     telephone: prefilledData?.client?.telephone || '',
     courriel: prefilledData?.client?.courriel || '',
-    dimensions: prefilledData?.toiture?.dimensions || [{ length: 0, width: 0, name: 'Section 1' }],  
-    parapets: prefilledData?.toiture?.parapets || [{ length: 0, width: 0, name: 'Parapet 1' }],
-    puitsLumiere: prefilledData?.toiture?.puitsLumiere || [{ length: 0, width: 0, name: 'Puit 1' }],
+    dimensions: prefilledData?.toiture?.dimensions || [{ length: 0, width: 0, name: '' }],  
+    parapets: prefilledData?.toiture?.parapets || [{ length: 0, width: 0, name: '' }],
+    puitsLumiere: prefilledData?.toiture?.puitsLumiere || [{ length: 0, width: 0, name: '' }],
     nbFeuilles: prefilledData?.materiaux?.nbFeuilles || 0,
     nbMax: prefilledData?.materiaux?.nbMax || 0,
     nbEvents: prefilledData?.materiaux?.nbEvents || 0,
@@ -442,13 +433,13 @@ const SoumissionForm = ({ prefilledData = null, onReturn, onComplete }) => {
   const [openSections, setOpenSections] = useState(['client', 'dimensions', 'parapets', 'materiaux', 'options', 'notes', 'photos']);
   const [showCamera, setShowCamera] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({
-  visible: false,
-  currentPhoto: 0,
-  totalPhotos: 0,
-  percentage: 0,
-  status: 'Préparation...',
-  errors: []
-});
+    visible: false,
+    currentPhoto: 0,
+    totalPhotos: 0,
+    percentage: 0,
+    status: 'Préparation...',
+    errors: []
+  });
 
   // Fonction pour sauvegarder le brouillon (silencieusement)
   const saveDraft = async () => {
@@ -477,7 +468,7 @@ const SoumissionForm = ({ prefilledData = null, onReturn, onComplete }) => {
   };
 
   // Fonction pour charger le brouillon (silencieusement)
-  const loadDraft = async () => {
+  const loadDraftData = async () => {
     try {
       const draftString = await AsyncStorage.getItem(AUTOSAVE_KEY);
       if (draftString) {
@@ -520,7 +511,11 @@ const SoumissionForm = ({ prefilledData = null, onReturn, onComplete }) => {
 
   // Charger le brouillon au démarrage
   useEffect(() => {
-    loadDraft();
+    if (!global.skipDraftLoad) {
+      loadDraftData();
+    }
+    // Réinitialiser le flag
+    global.skipDraftLoad = false;
   }, []);
 
   // Auto-save avec debounce
@@ -670,7 +665,7 @@ ${formData.dimensions.map((section, index) =>
 
 PARAPETS:
 ${formData.parapets.map((parapet, index) => 
-  `   ${parapet.name || `Parapet ${index + 1}`}: ${parapet.length} pi x ${parapet.width} po = ${(parapet.length * (parapet.width / 12)).toFixed(2)} pi²`
+  `   ${parapet.name || `Parapet ${index + 1}`}: ${parapet.width} po x ${parapet.length} pi = ${(parapet.length * (parapet.width / 12)).toFixed(2)} pi²`
 ).join('\n')}
 
 MATÉRIAUX ET ACCESSOIRES
@@ -706,180 +701,172 @@ ${currentDate} ${currentTime}
   };
 
   // Enregistrement complet
-
-
-const handleEnregistrerComplet = async () => {
-  if (!formData.adresse.trim()) {
-    Alert.alert('Erreur', 'Adresse du projet requise');
-    return;
-  }
-
-  const hasPhotos = photos.length > 0;
-  
-  // Vérifier le nombre de photos avec avertissement
-  if (photos.length > 25) {
-    Alert.alert(
-      'Trop de photos',
-      `Vous avez ${photos.length} photos. Pour éviter les erreurs, la limite recommandée est de 20 photos.\n\nContinuer quand même ?`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        { text: 'Continuer', onPress: () => proceedWithSave() }
-      ]
-    );
-    return;
-  }
-  
-  // Avertissement pour 20-25 photos
-  if (photos.length >= 20) {
-    Alert.alert(
-      'Beaucoup de photos',
-      `Vous avez ${photos.length} photos. Cela peut prendre plus de temps à sauvegarder.\n\nContinuer ?`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        { text: 'Continuer', onPress: () => proceedWithSave() }
-      ]
-    );
-    return;
-  }
-  
-  // Procéder normalement si moins de 20 photos
-  proceedWithSave();
-};
-
-// Fonction helper pour procéder à la sauvegarde
-const proceedWithSave = () => {
-  const hasPhotos = photos.length > 0;
-  
-  Alert.alert(
-    'Enregistrer la soumission',
-    hasPhotos 
-      ? `Enregistrer et partager la soumission avec ${photos.length} photo${photos.length > 1 ? 's' : ''} ?\n\n⏱️ Temps estimé: ${Math.ceil(photos.length * 3)} secondes`
-      : 'Enregistrer et partager la soumission (aucune photo) ?',
-    [
-      { text: 'Annuler', style: 'cancel' },
-      { text: 'Enregistrer', onPress: async () => { await processCompleteSubmission(); }, style: 'default' }
-    ]
-  );
-};
-
-  // Process de soumission complet
-
-const processCompleteSubmission = async () => {
-  try {
-    console.log('🚀 Début sauvegarde soumission...');
-    
-    // Validation préliminaire
-    if (!formData.adresse || formData.adresse.trim() === '') {
+  const handleEnregistrerComplet = async () => {
+    if (!formData.adresse.trim()) {
       Alert.alert('Erreur', 'Adresse du projet requise');
       return;
     }
-    
-    // Créer les données de base (sans photos)
-    const baseSubmission = createSafeSubmission(formData, superficie, date, photos);
-    
-    // Valider les données avant sauvegarde
-    const validatedSubmission = validateFirebaseData(baseSubmission);
-    
-    console.log('✅ Données validées pour Firebase');
-    
-    // Déterminer l'ID de soumission
-    const isExistingAssignment = Boolean(formData.isAssignment && formData.assignmentId);
-    const address = formData.adresse.trim();
-    const submissionId = isExistingAssignment ? formData.assignmentId : address
-      .toLowerCase()
-      .replace(/[^a-zA-Z0-9\s]/g, '')
-      .replace(/\s+/g, '_')
-      .substring(0, 60);
-    
-    console.log(`📋 ID soumission: ${submissionId}`);
-    
-    // Upload des photos avec la nouvelle fonction robuste
-    // ✅ REMPLACER par ceci
-const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUploadProgress);
-    
-    // Mettre à jour les données avec les photos
-    validatedSubmission.photos = photoResult.uploadedUrls;
-    validatedSubmission.photoCount = photoResult.uploadedUrls.length;
-    validatedSubmission.uploadStats = photoResult.stats;
-    
-    if (photoResult.errors.length > 0) {
-      validatedSubmission.uploadErrors = photoResult.errors;
-    }
-    
-    console.log(`📸 Photos: ${photoResult.stats.uploaded}/${photoResult.stats.total} uploadées`);
-    
-    // Sauvegarder dans Firebase
-    let firebaseResult;
-    if (isExistingAssignment) {
-      console.log('🔄 Mise à jour assignment existant...');
-      firebaseResult = await updateSubmissionInFirebase(submissionId, validatedSubmission);
-    } else {
-      console.log('🆕 Création nouvelle soumission...');
-      firebaseResult = await saveSubmissionToFirebase(validatedSubmission);
-    }
-    
-    if (firebaseResult.success) {
-      console.log('✅ Soumission sauvegardée avec succès');
-      
-      // Nettoyer le brouillon après succès
-      await clearDraft();
-      
-      // Message de succès personnalisé selon les résultats
-      if (photoResult.errors.length === 0) {
-        Alert.alert(
-          'Succès !', 
-          `Soumission sauvegardée avec ${photoResult.stats.uploaded} photos`
-        );
-      } else {
-        Alert.alert(
-          'Sauvegarde réussie avec avertissements',
-          `Soumission sauvegardée.\n✅ ${photoResult.stats.uploaded} photos uploadées\n⚠️ ${photoResult.errors.length} photos échouées\n\nErreurs:\n${photoResult.errors.slice(0, 3).join('\n')}${photoResult.errors.length > 3 ? '\n...' : ''}`
-        );
-      }
-      
-      // Partager
-      setTimeout(async () => {
-        await shareWithRNShare();
-        setTimeout(() => {
-          if (onComplete) {
-            onComplete(submissionId);
-          }
-        }, 1000);
-      }, 500);
-      
-    } else {
-      throw new Error(firebaseResult.error || 'Erreur sauvegarde Firebase');
-    }
 
-  } catch (error) {
-    console.error('❌ Erreur processCompleteSubmission:', error);
+    const hasPhotos = photos.length > 0;
+    
+    // Vérifier le nombre de photos avec avertissement
+    if (photos.length > 25) {
+      Alert.alert(
+        'Trop de photos',
+        `Vous avez ${photos.length} photos. Pour éviter les erreurs, la limite recommandée est de 20 photos.\n\nContinuer quand même ?`,
+        [
+          { text: 'Annuler', style: 'cancel' },
+          { text: 'Continuer', onPress: () => proceedWithSave() }
+        ]
+      );
+      return;
+    }
+    
+    // Avertissement pour 20-25 photos
+    if (photos.length >= 20) {
+      Alert.alert(
+        'Beaucoup de photos',
+        `Vous avez ${photos.length} photos. Cela peut prendre plus de temps à sauvegarder.\n\nContinuer ?`,
+        [
+          { text: 'Annuler', style: 'cancel' },
+          { text: 'Continuer', onPress: () => proceedWithSave() }
+        ]
+      );
+      return;
+    }
+    
+    // Procéder normalement si moins de 20 photos
+    proceedWithSave();
+  };
+
+  // Fonction helper pour procéder à la sauvegarde
+  const proceedWithSave = () => {
+    const hasPhotos = photos.length > 0;
     
     Alert.alert(
-      'Erreur sauvegarde',
-      `Erreur: ${error.message}\n\nVos données sont sauvegardées en brouillon automatiquement.`,
+      'Enregistrer la soumission',
+      hasPhotos 
+        ? `Enregistrer et partager la soumission avec ${photos.length} photo${photos.length > 1 ? 's' : ''} ?\n\n⏱️ Temps estimé: ${Math.ceil(photos.length * 3)} secondes`
+        : 'Enregistrer et partager la soumission (aucune photo) ?',
       [
-        { text: 'OK', style: 'default' },
-        { 
-          text: 'Réessayer', 
-          onPress: () => processCompleteSubmission() 
-        }
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Enregistrer', onPress: async () => { await processCompleteSubmission(); }, style: 'default' }
       ]
     );
-  }
-};
+  };
 
-  // Génération des items pour les pickers
-  const generatePickerItems = (start, end) => {
-    return Array.from({ length: end - start + 1 }, (_, i) => ({ label: `${start + i}`, value: start + i }));
+  // Process de soumission complet
+  const processCompleteSubmission = async () => {
+    try {
+      console.log('🚀 Début sauvegarde soumission...');
+      
+      // Validation préliminaire
+      if (!formData.adresse || formData.adresse.trim() === '') {
+        Alert.alert('Erreur', 'Adresse du projet requise');
+        return;
+      }
+      
+      // Créer les données de base (sans photos)
+      const baseSubmission = createSafeSubmission(formData, superficie, date, photos);
+      
+      // Valider les données avant sauvegarde
+      const validatedSubmission = validateFirebaseData(baseSubmission);
+      
+      console.log('✅ Données validées pour Firebase');
+      
+      // Déterminer l'ID de soumission
+      const isExistingAssignment = Boolean(formData.isAssignment && formData.assignmentId);
+      const address = formData.adresse.trim();
+      const submissionId = isExistingAssignment ? formData.assignmentId : address
+        .toLowerCase()
+        .replace(/[^a-zA-Z0-9\s]/g, '')
+        .replace(/\s+/g, '_')
+        .substring(0, 60);
+      
+      console.log(`📋 ID soumission: ${submissionId}`);
+      
+      // Upload des photos avec la nouvelle fonction robuste
+      // ✅ REMPLACER par ceci
+      const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUploadProgress);
+      
+      // Mettre à jour les données avec les photos
+      validatedSubmission.photos = photoResult.uploadedUrls;
+      validatedSubmission.photoCount = photoResult.uploadedUrls.length;
+      validatedSubmission.uploadStats = photoResult.stats;
+      
+      if (photoResult.errors.length > 0) {
+        validatedSubmission.uploadErrors = photoResult.errors;
+      }
+      
+      console.log(`📸 Photos: ${photoResult.stats.uploaded}/${photoResult.stats.total} uploadées`);
+      
+      // Sauvegarder dans Firebase
+      let firebaseResult;
+      if (isExistingAssignment) {
+        console.log('🔄 Mise à jour assignment existant...');
+        firebaseResult = await updateSubmissionInFirebase(submissionId, validatedSubmission);
+      } else {
+        console.log('🆕 Création nouvelle soumission...');
+        firebaseResult = await saveSubmissionToFirebase(validatedSubmission);
+      }
+      
+      if (firebaseResult.success) {
+        console.log('✅ Soumission sauvegardée avec succès');
+        
+        // Nettoyer le brouillon après succès
+        await clearDraft();
+        
+        // Message de succès personnalisé selon les résultats
+        if (photoResult.errors.length === 0) {
+          Alert.alert(
+            'Succès !', 
+            `Soumission sauvegardée avec ${photoResult.stats.uploaded} photos`
+          );
+        } else {
+          Alert.alert(
+            'Sauvegarde réussie avec avertissements',
+            `Soumission sauvegardée.\n✅ ${photoResult.stats.uploaded} photos uploadées\n⚠️ ${photoResult.errors.length} photos échouées\n\nErreurs:\n${photoResult.errors.slice(0, 3).join('\n')}${photoResult.errors.length > 3 ? '\n...' : ''}`
+          );
+        }
+        
+        // Partager
+        setTimeout(async () => {
+          await shareWithRNShare();
+          setTimeout(() => {
+            if (onComplete) {
+              onComplete(submissionId);
+            }
+          }, 1000);
+        }, 500);
+        
+      } else {
+        throw new Error(firebaseResult.error || 'Erreur sauvegarde Firebase');
+      }
+
+    } catch (error) {
+      console.error('❌ Erreur processCompleteSubmission:', error);
+      
+      Alert.alert(
+        'Erreur sauvegarde',
+        `Erreur: ${error.message}\n\nVos données sont sauvegardées en brouillon automatiquement.`,
+        [
+          { text: 'OK', style: 'default' },
+          { 
+            text: 'Réessayer', 
+            onPress: () => processCompleteSubmission() 
+          }
+        ]
+      );
+    }
   };
 
   // Réinitialisation du formulaire
   const resetForm = async () => {
     setFormData({
       nom: '', adresse: '', telephone: '', courriel: '',
-      dimensions: [{ length: 0, width: 0, name: 'Section 1' }],
-      parapets: [{ length: 0, width: 0, name: 'Parapet 1' }],
-      puitsLumiere: [{ length: 0, width: 0, name: 'Puit 1' }],
+      dimensions: [{ length: 0, width: 0, name: '' }],
+      parapets: [{ length: 0, width: 0, name: '' }],
+      puitsLumiere: [{ length: 0, width: 0, name: '' }],
       nbFeuilles: 0, nbMax: 0, nbEvents: 0, nbDrains: 0, trepiedElectrique: 0,
       plusieursEpaisseurs: false, hydroQuebec: false, grue: false, trackfall: false, notes: ''
     });
@@ -889,7 +876,7 @@ const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUpload
 
   // Gestion des puits de lumière
   const addPuitLumiere = () => {
-    setFormData({ ...formData, puitsLumiere: [...formData.puitsLumiere, { length: 0, width: 0, name: `Puit ${formData.puitsLumiere.length + 1}` }] });
+    setFormData({ ...formData, puitsLumiere: [...formData.puitsLumiere, { length: 0, width: 0, name: '' }] });
   };
 
   const removePuitLumiere = (index) => {
@@ -902,7 +889,7 @@ const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUpload
 
   const handlePuitLumiereChange = (index, field, value) => {
     const newPuits = [...formData.puitsLumiere];
-    newPuits[index][field] = Number(value);
+    newPuits[index][field] = Number(value) || 0;
     setFormData({...formData, puitsLumiere: newPuits});
   };
 
@@ -926,7 +913,7 @@ const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUpload
   // Gestion des dimensions
   const handleDimensionChange = (sectionIndex, field, value) => {
     const newDimensions = [...formData.dimensions];
-    newDimensions[sectionIndex][field] = Number(value);
+    newDimensions[sectionIndex][field] = Number(value) || 0;
     setFormData({...formData, dimensions: newDimensions});
   };
 
@@ -958,13 +945,6 @@ const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUpload
       const newParapets = [...formData.parapets];
       newParapets.splice(index, 1);
       setFormData({...formData, parapets: newParapets});
-    }
-  };
-
-  // Ouvrir picker
-  const openPicker = (pickerKey) => {
-    if (pickerRefs.current[pickerKey]) {
-      pickerRefs.current[pickerKey].togglePicker();
     }
   };
 
@@ -1016,11 +996,6 @@ const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUpload
       </View>
     </View>
   );
-
-  const pickerSelectStyles = StyleSheet.create({
-    inputIOS: { opacity: 0, position: 'absolute', width: '100%', height: '100%', zIndex: 99999 },
-    inputAndroid: { opacity: 0, position: 'absolute', width: '100%', height: '100%', elevation: 99999 },
-  });
 
   return (
     <View style={styles.container}>
@@ -1091,26 +1066,37 @@ const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUpload
               {formData.dimensions.map((section, index) => (
                 <View key={`dim-section-${index}`} style={styles.dimSetContainer}>
                   <View style={styles.sectionHeaderRow}>
-                    <TextInput style={styles.sectionNameInput} value={section.name || `Section ${index + 1}`} onChangeText={(text) => handleSectionNameChange(index, text)} placeholder="Ex: Hangar" />
+                    <TextInput 
+                      style={styles.sectionNameInput} 
+                      value={section.name} 
+                      onChangeText={(text) => handleSectionNameChange(index, text)} 
+                      placeholder={`Section ${index + 1}`} 
+                    />
                   </View>
                   
                   <View style={styles.dimRow}>
                     <View style={styles.pickerContainer}>
                       <Text style={styles.pickerLabel}>Longueur (pieds)</Text>
-                      <TouchableOpacity style={styles.pickerTouchable} onPress={() => openPicker(`length-${index}`)}>
-                        <Text style={styles.pickerValueText}>{section.length || "0"}</Text>
-                        <RNPickerSelect ref={el => pickerRefs.current[`length-${index}`] = el} onValueChange={(value) => handleDimensionChange(index, 'length', value)} items={generatePickerItems(0, 200)} value={section.length} style={pickerSelectStyles} placeholder={{}} useNativeAndroidPickerStyle={false} />
-                      </TouchableOpacity>
+                      <TextInput
+                        style={styles.numberInput}
+                        value={section.length === 0 ? '' : section.length.toString()}
+                        onChangeText={(value) => handleDimensionChange(index, 'length', value)}
+                        keyboardType="numeric"
+                        placeholder="0"
+                      />
                     </View>
                     
                     <Text style={styles.multiply}>×</Text>
                     
                     <View style={styles.pickerContainer}>
                       <Text style={styles.pickerLabel}>Largeur (pieds)</Text>
-                      <TouchableOpacity style={styles.pickerTouchable} onPress={() => openPicker(`width-${index}`)}>
-                        <Text style={styles.pickerValueText}>{section.width || "0"}</Text>
-                        <RNPickerSelect ref={el => pickerRefs.current[`width-${index}`] = el} onValueChange={(value) => handleDimensionChange(index, 'width', value)} items={generatePickerItems(0, 200)} value={section.width} style={pickerSelectStyles} placeholder={{}} useNativeAndroidPickerStyle={false} />
-                      </TouchableOpacity>
+                      <TextInput
+                        style={styles.numberInput}
+                        value={section.width === 0 ? '' : section.width.toString()}
+                        onChangeText={(value) => handleDimensionChange(index, 'width', value)}
+                        keyboardType="numeric"
+                        placeholder="0"
+                      />
                     </View>
                   </View>
                   
@@ -1150,53 +1136,47 @@ const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUpload
                   <View style={styles.sectionHeaderRow}>
                     <TextInput
                       style={styles.sectionNameInput}
-                      value={parapet.name || `Parapet ${index + 1}`}
+                      value={parapet.name}
                       onChangeText={(text) => {
                         const newParapets = [...formData.parapets];
                         newParapets[index].name = text;
                         setFormData({...formData, parapets: newParapets});
                       }}
-                      placeholder="Ex: Parapet nord"
+                      placeholder={`Parapet ${index + 1}`}
                     />
                   </View>
 
                   <View style={styles.dimRow}>
                     <View style={styles.pickerContainer}>
-                      <Text style={styles.pickerLabel}>Longueur (pieds)</Text>
-                      <TouchableOpacity style={styles.pickerTouchable} onPress={() => openPicker(`parapet-length-${index}`)}>
-                        <Text style={styles.pickerValueText}>{parapet.length || "0"}</Text>
-                        <RNPickerSelect
-                          ref={el => pickerRefs.current[`parapet-length-${index}`] = el}
-                          onValueChange={(value) => {
-                            const newParapets = [...formData.parapets];
-                            newParapets[index].length = value;
-                            setFormData({...formData, parapets: newParapets});
-                          }}
-                          items={generatePickerItems(0, 200)}
-                          value={parapet.length}
-                          style={pickerSelectStyles}
-                        />
-                      </TouchableOpacity>
+                      <Text style={styles.pickerLabel}>Largeur (pouces)</Text>
+                      <TextInput
+                        style={styles.numberInput}
+                        value={parapet.width === 0 ? '' : parapet.width.toString()}
+                        onChangeText={(value) => {
+                          const newParapets = [...formData.parapets];
+                          newParapets[index].width = Number(value) || 0;
+                          setFormData({...formData, parapets: newParapets});
+                        }}
+                        keyboardType="numeric"
+                        placeholder="0"
+                      />
                     </View>
 
                     <Text style={styles.multiply}>×</Text>
 
                     <View style={styles.pickerContainer}>
-                      <Text style={styles.pickerLabel}>Largeur (pouces)</Text>
-                      <TouchableOpacity style={styles.pickerTouchable} onPress={() => openPicker(`parapet-width-${index}`)}>
-                        <Text style={styles.pickerValueText}>{parapet.width || "0"}</Text>
-                        <RNPickerSelect
-                          ref={el => pickerRefs.current[`parapet-width-${index}`] = el}
-                          onValueChange={(value) => {
-                            const newParapets = [...formData.parapets];
-                            newParapets[index].width = value;
-                            setFormData({...formData, parapets: newParapets});
-                          }}
-                          items={generatePickerItems(0, 200)}
-                          value={parapet.width}
-                          style={pickerSelectStyles}
-                        />
-                      </TouchableOpacity>
+                      <Text style={styles.pickerLabel}>Longueur (pieds)</Text>
+                      <TextInput
+                        style={styles.numberInput}
+                        value={parapet.length === 0 ? '' : parapet.length.toString()}
+                        onChangeText={(value) => {
+                          const newParapets = [...formData.parapets];
+                          newParapets[index].length = Number(value) || 0;
+                          setFormData({...formData, parapets: newParapets});
+                        }}
+                        keyboardType="numeric"
+                        placeholder="0"
+                      />
                     </View>
                   </View>
 
@@ -1234,82 +1214,57 @@ const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUpload
               <View style={styles.materiauxGrid}>
                 <View style={styles.materiauxItem}>
                   <Text style={styles.label}>Feuilles de tôles</Text>
-                  <TouchableOpacity style={styles.pickerTouchable} onPress={() => openPicker('nbFeuilles')}>
-                    <Text style={styles.pickerValueText}>{formData.nbFeuilles || "0"}</Text>
-                    <RNPickerSelect
-                      ref={el => pickerRefs.current['nbFeuilles'] = el}
-                      onValueChange={(value) => setFormData({...formData, nbFeuilles: value})}
-                      items={generatePickerItems(0, 200)}
-                      value={formData.nbFeuilles}
-                      style={pickerSelectStyles}
-                      placeholder={{}}
-                      useNativeAndroidPickerStyle={false}
-                    />
-                  </TouchableOpacity>
+                  <TextInput
+                    style={styles.numberInput}
+                    value={formData.nbFeuilles === 0 ? '' : formData.nbFeuilles.toString()}
+                    onChangeText={(value) => setFormData({...formData, nbFeuilles: Number(value) || 0})}
+                    keyboardType="numeric"
+                    placeholder="0"
+                  />
                 </View>
                 
                 <View style={styles.materiauxItem}>
                   <Text style={styles.label}>Maximum</Text>
-                  <TouchableOpacity style={styles.pickerTouchable} onPress={() => openPicker('nbMax')}>
-                    <Text style={styles.pickerValueText}>{formData.nbMax || "0"}</Text>
-                    <RNPickerSelect
-                      ref={el => pickerRefs.current['nbMax'] = el}
-                      onValueChange={(value) => setFormData({...formData, nbMax: value})}
-                      items={generatePickerItems(0, 200)}
-                      value={formData.nbMax}
-                      style={pickerSelectStyles}
-                      placeholder={{}}
-                      useNativeAndroidPickerStyle={false}
-                    />
-                  </TouchableOpacity>
+                  <TextInput
+                    style={styles.numberInput}
+                    value={formData.nbMax === 0 ? '' : formData.nbMax.toString()}
+                    onChangeText={(value) => setFormData({...formData, nbMax: Number(value) || 0})}
+                    keyboardType="numeric"
+                    placeholder="0"
+                  />
                 </View>
                 
                 <View style={styles.materiauxItem}>
                   <Text style={styles.label}>Évents</Text>
-                  <TouchableOpacity style={styles.pickerTouchable} onPress={() => openPicker('nbEvents')}>
-                    <Text style={styles.pickerValueText}>{formData.nbEvents || "0"}</Text>
-                    <RNPickerSelect
-                      ref={el => pickerRefs.current['nbEvents'] = el}
-                      onValueChange={(value) => setFormData({...formData, nbEvents: value})}
-                      items={generatePickerItems(0, 200)}
-                      value={formData.nbEvents}
-                      style={pickerSelectStyles}
-                      placeholder={{}}
-                      useNativeAndroidPickerStyle={false}
-                    />
-                  </TouchableOpacity>
+                  <TextInput
+                    style={styles.numberInput}
+                    value={formData.nbEvents === 0 ? '' : formData.nbEvents.toString()}
+                    onChangeText={(value) => setFormData({...formData, nbEvents: Number(value) || 0})}
+                    keyboardType="numeric"
+                    placeholder="0"
+                  />
                 </View>
                 
                 <View style={styles.materiauxItem}>
                   <Text style={styles.label}>Drains</Text>
-                  <TouchableOpacity style={styles.pickerTouchable} onPress={() => openPicker('nbDrains')}>
-                    <Text style={styles.pickerValueText}>{formData.nbDrains || "0"}</Text>
-                    <RNPickerSelect
-                      ref={el => pickerRefs.current['nbDrains'] = el}
-                      onValueChange={(value) => setFormData({...formData, nbDrains: value})}
-                      items={generatePickerItems(0, 200)}
-                      value={formData.nbDrains}
-                      style={pickerSelectStyles}
-                      placeholder={{}}
-                      useNativeAndroidPickerStyle={false}
-                    />
-                  </TouchableOpacity>
+                  <TextInput
+                    style={styles.numberInput}
+                    value={formData.nbDrains === 0 ? '' : formData.nbDrains.toString()}
+                    onChangeText={(value) => setFormData({...formData, nbDrains: Number(value) || 0})}
+                    keyboardType="numeric"
+                    placeholder="0"
+                  />
                 </View>
                 
                 <View style={styles.materiauxItem}>
                   <Text style={styles.label}>Trépied électrique</Text>
-                  <TouchableOpacity style={styles.pickerTouchable} onPress={() => openPicker('trepiedElectrique')}>
-                    <Text style={styles.pickerValueText}>{formData.trepiedElectrique || "0"}</Text>
-                    <RNPickerSelect
-                      ref={el => pickerRefs.current['trepiedElectrique'] = el}
-                      onValueChange={(value) => setFormData({...formData, trepiedElectrique: value})}
-                      items={generatePickerItems(0, 200)}
-                      value={formData.trepiedElectrique}
-                      style={pickerSelectStyles}
-                      placeholder={{}}
-                      useNativeAndroidPickerStyle={false}
-                    />
-                  </TouchableOpacity>
+                  <TextInput
+                    style={styles.numberInput}
+                    value={formData.trepiedElectrique === 0 ? '' : formData.trepiedElectrique.toString()}
+                    onChangeText={(value) => setFormData({...formData, trepiedElectrique: Number(value) || 0})}
+                    keyboardType="numeric"
+                    placeholder="0"
+                  />
                 </View>
               </View>
 
@@ -1335,32 +1290,26 @@ const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUpload
                     <View style={styles.dimRow}>
                       <View style={styles.pickerContainer}>
                         <Text style={styles.pickerLabel}>Longueur (pouces)</Text>
-                        <TouchableOpacity style={[styles.pickerTouchable, { height: 45 }]} onPress={() => openPicker(`puit-length-${index}`)}>
-                          <Text style={styles.pickerValueText}>{puit.length || "0"}</Text>
-                          <RNPickerSelect
-                            ref={el => pickerRefs.current[`puit-length-${index}`] = el}
-                            onValueChange={(value) => handlePuitLumiereChange(index, 'length', value)}
-                            items={generatePickerItems(0, 200)}
-                            value={puit.length}
-                            style={pickerSelectStyles}
-                          />
-                        </TouchableOpacity>
+                        <TextInput
+                          style={[styles.numberInput, { height: 45 }]}
+                          value={puit.length === 0 ? '' : puit.length.toString()}
+                          onChangeText={(value) => handlePuitLumiereChange(index, 'length', value)}
+                          keyboardType="numeric"
+                          placeholder="0"
+                        />
                       </View>
 
                       <Text style={styles.multiply}>×</Text>
 
                       <View style={styles.pickerContainer}>
                         <Text style={styles.pickerLabel}>Largeur (pouces)</Text>
-                        <TouchableOpacity style={[styles.pickerTouchable, { height: 45 }]} onPress={() => openPicker(`puit-width-${index}`)}>
-                          <Text style={styles.pickerValueText}>{puit.width || "0"}</Text>
-                          <RNPickerSelect
-                            ref={el => pickerRefs.current[`puit-width-${index}`] = el}
-                            onValueChange={(value) => handlePuitLumiereChange(index, 'width', value)}
-                            items={generatePickerItems(0, 200)}
-                            value={puit.width}
-                            style={pickerSelectStyles}
-                          />
-                        </TouchableOpacity>
+                        <TextInput
+                          style={[styles.numberInput, { height: 45 }]}
+                          value={puit.width === 0 ? '' : puit.width.toString()}
+                          onChangeText={(value) => handlePuitLumiereChange(index, 'width', value)}
+                          keyboardType="numeric"
+                          placeholder="0"
+                        />
                       </View>
                     </View>
 
@@ -1541,9 +1490,7 @@ const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUpload
         />
       )}
 
-      
-
-   {/* ✅ NOUVEAU: Modal de progression d'upload */}
+      {/* ✅ NOUVEAU: Modal de progression d'upload */}
       <UploadProgressModal 
         uploadProgress={uploadProgress} 
         setUploadProgress={setUploadProgress} 
@@ -1557,15 +1504,13 @@ const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUpload
         </View>
       )}
 
-
       <StatusBar style="light" />
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-
-container: { flex: 1, backgroundColor: '#f5f7fa' },
+  container: { flex: 1, backgroundColor: '#f5f7fa' },
   formHeader: { backgroundColor: '#2c3e50', flexDirection: 'row', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 50 : 20, paddingBottom: 20, paddingHorizontal: 20 },
   backButton: { flexDirection: 'row', alignItems: 'center', marginRight: 15 },
   backText: { color: 'white', marginLeft: 8, fontSize: 16 },
@@ -1585,8 +1530,6 @@ container: { flex: 1, backgroundColor: '#f5f7fa' },
   gridItem: { width: '48%' },
   dimRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 15 },
   pickerContainer: { flex: 1 },
-  pickerTouchable: { height: 50, borderWidth: 1, borderColor: '#dfe6e9', borderRadius: 8, justifyContent: 'center', paddingHorizontal: 10, backgroundColor: 'white', marginBottom: 15 },
-  pickerValueText: { fontSize: 16, color: '#2d3436' },
   pickerLabel: { fontSize: 12, color: '#7f8c8d', marginBottom: 2 },
   multiply: { fontWeight: 'bold', color: '#3498db', fontSize: 18, marginHorizontal: 5 },
   materiauxGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', zIndex: 10000, elevation: 10000 },
@@ -1621,6 +1564,19 @@ container: { flex: 1, backgroundColor: '#f5f7fa' },
   phoneInput: { flex: 1, paddingRight: 50 },
   callButton: { position: 'absolute', right: 8, top: 8, bottom: 8, width: 30, backgroundColor: '#27ae60', borderRadius: 6, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2, elevation: 2 },
   
+  // Nouveau style pour les inputs numériques
+  numberInput: {
+    height: 50,
+    borderWidth: 1,
+    borderColor: '#dfe6e9',
+    borderRadius: 8,
+    paddingHorizontal: 15,
+    backgroundColor: 'white',
+    fontSize: 16,
+    color: '#2d3436',
+    textAlign: 'center',
+  },
+  
   // Styles pour les photos Evernote
   photosSectionEvernote: { padding: 0, backgroundColor: '#f5f7fa' },
   addPhotoButtonEvernote: { backgroundColor: '#3498db', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 15, margin: 15, borderRadius: 8 },
@@ -1641,110 +1597,9 @@ container: { flex: 1, backgroundColor: '#f5f7fa' },
   closeButtonFullScreen: { padding: 10 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white' },
   loadingText: { marginTop: 10, color: '#666', fontSize: 16 },
-  // Styles pour le modal de progression
-  progressModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  progressModalContent: {
-    backgroundColor: 'white',
-    borderRadius: 15,
-    padding: 25,
-    width: '100%',
-    maxHeight: '80%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 20,
-  },
-  progressHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-    justifyContent: 'center',
-  },
-  progressTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#2c3e50',
-    marginLeft: 10,
-  },
-  progressBarContainer: {
-    marginBottom: 20,
-  },
-  progressBarBackground: {
-    height: 12,
-    backgroundColor: '#ecf0f1',
-    borderRadius: 6,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: '#3498db',
-    borderRadius: 6,
-  },
-  progressPercentage: {
-    textAlign: 'center',
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#3498db',
-    marginTop: 8,
-  },
-  progressStatus: {
-    textAlign: 'center',
-    fontSize: 16,
-    color: '#2c3e50',
-    marginBottom: 10,
-    fontWeight: '500',
-  },
-  progressCounter: {
-    textAlign: 'center',
-    fontSize: 14,
-    color: '#7f8c8d',
-    marginBottom: 20,
-  },
-  photoStatusList: {
-    maxHeight: 150,
-    marginBottom: 15,
-  },
-  photoStatusItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 3,
-  },
-  photoStatusIcon: {
-    fontSize: 16,
-    marginRight: 10,
-    width: 20,
-  },
-  photoStatusText: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  errorSection: {
-    backgroundColor: '#fff3cd',
-    padding: 15,
-    borderRadius: 8,
-    borderColor: '#ffeaa7',
-    borderWidth: 1,
-  },
-  errorTitle: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#856404',
-    marginBottom: 5,
-  },
-  errorText: {
-    fontSize: 12,
-    color: '#856404',
-    marginBottom: 2,
-  },
   
-uploadModalOverlay: {
+  // Styles pour le modal de progression
+  uploadModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     justifyContent: 'center',
@@ -1795,7 +1650,6 @@ uploadModalOverlay: {
   progressBarFill: {
     height: '100%',
     borderRadius: 4,
-    // ✅ Retiré 'transition' qui ne fonctionne pas en React Native
   },
   percentageText: {
     fontSize: 16,
@@ -1831,7 +1685,6 @@ uploadModalOverlay: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
-    // ✅ Retiré 'gap' qui peut poser problème selon la version RN
   },
   photoIconWrapper: {
     alignItems: 'center',
@@ -1923,8 +1776,6 @@ uploadModalOverlay: {
     color: '#7f8c8d',
     fontStyle: 'italic',
   },
-
-  
 });
 
 export default SoumissionForm;
