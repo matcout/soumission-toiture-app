@@ -15,7 +15,7 @@ import {
   Linking
 } from 'react-native';
 import { FontAwesome5 } from '@expo/vector-icons';
-import { updateSubmissionInFirebase } from '../firebaseFunctions';
+import FirebaseSync from '../firebaseSync';
 
 const { width, height } = Dimensions.get('window');
 
@@ -65,23 +65,26 @@ const SubmissionViewer = ({ submission, onBack }) => {
   };
 
   // Sauvegarder les notes
-  const handleSaveNotes = async () => {
-    setIsSaving(true);
-    try {
-      const result = await updateSubmissionInFirebase(submission.id, { notes: editedNotes.trim() });
-      if (result.success) {
-        submission.notes = editedNotes.trim();
-        setIsEditingNotes(false);
-        Alert.alert('Succès', 'Notes sauvegardées');
-      } else {
-        throw new Error(result.error || 'Erreur de sauvegarde');
-      }
-    } catch (error) {
-      Alert.alert('Erreur', 'Impossible de sauvegarder les notes');
-    } finally {
-      setIsSaving(false);
+const handleSaveNotes = async () => {
+  setIsSaving(true);
+  try {
+    const result = await FirebaseSync.updateSubmission(submission.id, { 
+      notes: editedNotes.trim() 
+    });
+    
+    if (result.success) {
+      submission.notes = editedNotes.trim();
+      setIsEditingNotes(false);
+      Alert.alert('Succès', 'Notes sauvegardées');
+    } else {
+      throw new Error(result.error || 'Erreur de sauvegarde');
     }
-  };
+  } catch (error) {
+    Alert.alert('Erreur', 'Impossible de sauvegarder les notes');
+  } finally {
+    setIsSaving(false);
+  }
+};
 
   // Calculer superficie totale
   const getSuperficieTotale = () => {

@@ -19,7 +19,7 @@ import {
   Animated
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { saveSubmissionToFirebase, updateSubmissionInFirebase, uploadPhotosToFirebase } from '../firebaseFunctions';
+import FirebaseSync from '../firebaseSync'; // ✅ NOUVEAU - Remplacement de firebaseFunctions
 import { StatusBar } from 'expo-status-bar';
 import { FontAwesome5 } from '@expo/vector-icons';
 import CustomCamera from '../CustomCamera';
@@ -755,7 +755,7 @@ ${currentDate} ${currentTime}
     );
   };
 
-  // Process de soumission complet
+  // ✅ FONCTION MODIFIÉE POUR UTILISER FIREBASESYNC
   const processCompleteSubmission = async () => {
     try {
       console.log('🚀 Début sauvegarde soumission...');
@@ -774,20 +774,20 @@ ${currentDate} ${currentTime}
       
       console.log('✅ Données validées pour Firebase');
       
-      // Déterminer l'ID de soumission
+      // Déterminer l'ID de soumission temporaire pour l'upload
       const isExistingAssignment = Boolean(formData.isAssignment && formData.assignmentId);
-      const address = formData.adresse.trim();
-      const submissionId = isExistingAssignment ? formData.assignmentId : address
+      const tempSubmissionId = isExistingAssignment ? formData.assignmentId : formData.adresse.trim()
         .toLowerCase()
         .replace(/[^a-zA-Z0-9\s]/g, '')
         .replace(/\s+/g, '_')
         .substring(0, 60);
       
-      console.log(`📋 ID soumission: ${submissionId}`);
-      
-      // Upload des photos avec la nouvelle fonction robuste
-      // ✅ REMPLACER par ceci
-      const photoResult = await uploadPhotosToFirebase(submissionId, photos, setUploadProgress);
+      // Upload des photos avec FirebaseSync
+      const photoResult = await FirebaseSync.uploadPhotos(
+        tempSubmissionId, 
+        photos, 
+        setUploadProgress
+      );
       
       // Mettre à jour les données avec les photos
       validatedSubmission.photos = photoResult.uploadedUrls;
@@ -800,14 +800,25 @@ ${currentDate} ${currentTime}
       
       console.log(`📸 Photos: ${photoResult.stats.uploaded}/${photoResult.stats.total} uploadées`);
       
-      // Sauvegarder dans Firebase
+      // Sauvegarder avec FirebaseSync
       let firebaseResult;
+      
       if (isExistingAssignment) {
         console.log('🔄 Mise à jour assignment existant...');
-        firebaseResult = await updateSubmissionInFirebase(submissionId, validatedSubmission);
+        firebaseResult = await FirebaseSync.updateSubmission(
+          formData.assignmentId, 
+          {
+            ...validatedSubmission,
+            status: 'captured',
+            folderSlug: 'pending' // Déplacer vers "À compléter"
+          }
+        );
       } else {
         console.log('🆕 Création nouvelle soumission...');
-        firebaseResult = await saveSubmissionToFirebase(validatedSubmission);
+        firebaseResult = await FirebaseSync.createSubmission(
+          validatedSubmission,
+          'mobile'
+        );
       }
       
       if (firebaseResult.success) {
@@ -834,7 +845,7 @@ ${currentDate} ${currentTime}
           await shareWithRNShare();
           setTimeout(() => {
             if (onComplete) {
-              onComplete(submissionId);
+              onComplete(firebaseResult.id || formData.assignmentId);
             }
           }, 1000);
         }, 500);
@@ -1490,7 +1501,7 @@ ${currentDate} ${currentTime}
         />
       )}
 
-      {/* ✅ NOUVEAU: Modal de progression d'upload */}
+      {/* ✅ Modal de progression d'upload */}
       <UploadProgressModal 
         uploadProgress={uploadProgress} 
         setUploadProgress={setUploadProgress} 

@@ -15,21 +15,106 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { FontAwesome5 } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { collection, getDocs, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { db } from './firebase';
 
-// Imports Firebase et synchronisation
-import { subscribeToSubmissions, createAssignment, updateSubmissionStatus, deleteSubmissionFromFirebase } from './firebaseFunctions';
-import { subscribeToFolders } from './folderSyncFunctions';
-import { testFirebaseConnection } from './firebase';
+// Import du nouveau système unifié
+import FirebaseSync from './firebaseSync';
 
 // Imports composants
 import SoumissionForm from './components/SoumissionForm';
 import AssignmentModal from './AssignmentModal';
 import SubmissionViewer from './components/SubmissionViewer';
 
+// 🔧 FONCTIONS DE MAINTENANCE
+const correctParentIds = async () => {
+  console.log('🔧 Correction des parentId...');
+  
+  try {
+    // Mapping des anciens parentId vers les nouveaux
+    const parentMapping = {
+      'system_project2025': 'projet_2025',
+      'system_project2024': 'projet_2024',
+      'folder_allo_1751932501620': null, // Ces dossiers test seront orphelins
+      'folder_maison_1751933590924': null,
+      'folder_1752020017718': null,
+      'folder_1752017001340': null
+    };
+    
+    const foldersSnapshot = await getDocs(collection(db, 'folders'));
+    let corrected = 0;
+    let deleted = 0;
+    
+    for (const docSnapshot of foldersSnapshot.docs) {
+      const data = docSnapshot.data();
+      const updates = {};
+      
+      // Si le dossier a un parentId incorrect
+      if (data.parentId && parentMapping.hasOwnProperty(data.parentId)) {
+        const newParentId = parentMapping[data.parentId];
+        
+        if (newParentId === null) {
+          // C'est un dossier test orphelin, on peut le supprimer
+          console.log(`🗑️ Suppression dossier test orphelin: ${data.label}`);
+          await deleteDoc(docSnapshot.ref);
+          deleted++;
+        } else {
+          // Corriger le parentId
+          console.log(`✏️ Correction: ${data.label} - parentId: ${data.parentId} → ${newParentId}`);
+          updates.parentId = newParentId;
+          
+          await updateDoc(docSnapshot.ref, updates);
+          corrected++;
+        }
+      }
+    }
+    
+    console.log(`✅ Correction terminée: ${corrected} corrigés, ${deleted} supprimés`);
+    return { success: true, corrected, deleted };
+    
+  } catch (error) {
+    console.error('❌ Erreur correction:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Fonction pour nettoyer les vieux dossiers test
+const cleanupTestFolders = async () => {
+  console.log('🧹 Nettoyage des dossiers test...');
+  
+  try {
+    const testFolderNames = ['yo', 'Test', 'allo', 'soumissopm test 2024'];
+    const foldersSnapshot = await getDocs(collection(db, 'folders'));
+    let deleted = 0;
+    
+    for (const docSnapshot of foldersSnapshot.docs) {
+      const data = docSnapshot.data();
+      
+      if (testFolderNames.includes(data.label) || 
+          data.slug?.includes('test') || 
+          data.slug?.includes('allo') ||
+          data.slug?.includes('yo')) {
+        console.log(`🗑️ Suppression dossier test: ${data.label}`);
+        await deleteDoc(docSnapshot.ref);
+        deleted++;
+      }
+    }
+    
+    console.log(`✅ ${deleted} dossiers test supprimés`);
+    return { success: true, deleted };
+    
+  } catch (error) {
+    console.error('❌ Erreur nettoyage:', error);
+    return { success: false, error: error.message };
+  }
+};
+// FIN DES FONCTIONS DE MAINTENANCE 🔧
+
 export default function App() {
   // États principaux
   const [submissions, setSubmissions] = useState([]);
   const [folders, setFolders] = useState({});
+  const [foldersList, setFoldersList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [firebaseConnected, setFirebaseConnected] = useState(false);
   
@@ -40,62 +125,45 @@ export default function App() {
   const [selectedSubmission, setSelectedSubmission] = useState(null);
   
   // États UI
-  const [expandedFolders, setExpandedFolders] = useState(['system_project2025', 'projet_2025', 'Projet 2025']); // Toutes les variantes possibles
+  const [expandedFolders, setExpandedFolders] = useState(['projet_2025']); // Slug au lieu d'ID
   const [showAssignmentModal, setShowAssignmentModal] = useState(false);
   const [showSubmissionViewer, setShowSubmissionViewer] = useState(false);
   const [viewerSubmission, setViewerSubmission] = useState(null);
 
-  // Initialisation et synchronisation
+  // Initialisation et synchronisation avec FirebaseSync
   useEffect(() => {
     let unsubscribeSubmissions = null;
     let unsubscribeFolders = null;
 
     const initializeApp = async () => {
-      console.log('🔥 Initialisation app mobile...');
+      console.log('🔥 Initialisation app mobile avec FirebaseSync...');
       
       try {
-        const connected = await testFirebaseConnection();
-        setFirebaseConnected(connected);
+        // Initialiser les dossiers système
+        const initResult = await FirebaseSync.initialize();
+        setFirebaseConnected(initResult.success);
         
-        if (connected) {
-          // S'abonner aux changements de dossiers (temps réel)
-          unsubscribeFolders = subscribeToFolders((result) => {
+        if (initResult.success) {
+          // S'abonner aux dossiers
+          unsubscribeFolders = FirebaseSync.subscribeFolders((result) => {
             if (result.success) {
-              const foldersMap = {};
-              
-              result.data.forEach(folder => {
-                foldersMap[folder.id] = {
-                  ...folder,
-                  filter: folder.filterConfig 
-                    ? (submissions) => applyFolderFilter(folder, submissions)
-                    : (submissions) => {
-                        // Pour les dossiers personnalisés, filtrer par folderId
-                        if (folder.id === 'projet_2025_soumissions') {
-                          return submissions.filter(s => 
-                            s.folderId === 'projet_2025_soumissions' || 
-                            s.status === 'completed'
-                          );
-                        }
-                        return submissions.filter(s => s.folderId === folder.id);
-                      }
-                };
-              });
-              
-              setFolders(foldersMap);
-              console.log(`✅ ${result.data.length} dossiers synchronisés`);
+              setFolders(result.data);
+              setFoldersList(result.list);
+              console.log(`✅ ${result.list.length} dossiers synchronisés`);
             }
           });
           
           // S'abonner aux soumissions
-          unsubscribeSubmissions = subscribeToSubmissions((result) => {
+          unsubscribeSubmissions = FirebaseSync.subscribeSubmissions((result) => {
             if (result.success) {
               setSubmissions(result.data);
-              console.log(`✅ ${result.count} soumissions chargées`);
+              console.log(`✅ ${result.count} soumissions synchronisées`);
             }
           });
         }
       } catch (error) {
         console.error('❌ Erreur initialisation:', error);
+        setFirebaseConnected(false);
       } finally {
         setLoading(false);
       }
@@ -109,40 +177,32 @@ export default function App() {
     };
   }, []);
 
-  // Appliquer le filtre d'un dossier
-  const applyFolderFilter = (folder, submissions) => {
-    if (!folder.filterConfig) {
-      // Log spécial pour projet_2025_soumissions
-      if (folder.id === 'projet_2025_soumissions') {
-        console.log('🔍 Filtrage soumissions complétées pour:', folder.id);
-        const result = submissions.filter(s => 
-          s.folderId === 'projet_2025_soumissions' || s.status === 'completed'
-        );
-        console.log(`✅ Trouvé ${result.length} soumissions`);
-        return result;
-      }
+  // 🔧 DEBUG TEMPORAIRE - pour voir tous les dossiers
+  useEffect(() => {
+    if (foldersList.length > 0) {
+      console.log('📁 TOUS LES DOSSIERS:');
+      foldersList.forEach(folder => {
+        console.log(`- ${folder.label} (parent: ${folder.parentId || 'aucun'}, slug: ${folder.slug})`);
+      });
       
-      return [];
+      // Compter les enfants de projet_2025
+      const projet2025Children = foldersList.filter(f => f.parentId === 'projet_2025');
+      console.log(`\n📊 Enfants de Projet 2025: ${projet2025Children.length}`);
+      projet2025Children.forEach(child => {
+        console.log(`  - ${child.label} (${child.slug})`);
+      });
     }
-    
-    const { filterConfig } = folder;
-    
-    if (filterConfig.type === 'status') {
-      return submissions.filter(s => s.status === filterConfig.value);
-    }
-    
-    return [];
-  };
+  }, [foldersList]);
 
   // Créer un nouvel assignment
   const handleCreateAssignment = async (assignmentData) => {
     try {
-      const modifiedData = {
-        ...assignmentData,
+      const result = await FirebaseSync.createAssignment({
+        client: assignmentData.client,
+        notes: assignmentData.notes,
         displayName: assignmentData.client.adresse
-      };
+      }, 'mobile');
       
-      const result = await createAssignment(modifiedData);
       if (result.success) {
         Alert.alert('Succès', 'Assignment créé avec succès');
         setShowAssignmentModal(false);
@@ -165,7 +225,7 @@ export default function App() {
           style: 'destructive',
           onPress: async () => {
             try {
-              const result = await deleteSubmissionFromFirebase(submissionId);
+              const result = await FirebaseSync.deleteSubmission(submissionId);
               if (result.success) {
                 Alert.alert('Succès', 'Soumission supprimée');
               } else {
@@ -191,7 +251,7 @@ export default function App() {
     setShowSubmissionViewer(true);
   };
 
-  // 🗺️ NOUVELLE FONCTION - Ouvrir Google Maps sur mobile
+  // Ouvrir Google Maps
   const openAddressInMaps = (address) => {
     if (!address || !address.trim()) {
       Alert.alert('Navigation', 'Aucune adresse disponible pour la navigation');
@@ -199,8 +259,6 @@ export default function App() {
     }
     
     const encodedAddress = encodeURIComponent(address.trim());
-    
-    // ✅ TOUJOURS Google Maps web (fonctionne à 100%)
     const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
     
     Linking.openURL(googleMapsUrl)
@@ -220,102 +278,118 @@ export default function App() {
   };
 
   // Toggle dossier étendu
-  const toggleFolder = (folderId) => {
+  const toggleFolder = (folderSlug) => {
     setExpandedFolders(prev =>
-      prev.includes(folderId)
-        ? prev.filter(id => id !== folderId)
-        : [...prev, folderId]
+      prev.includes(folderSlug)
+        ? prev.filter(slug => slug !== folderSlug)
+        : [...prev, folderSlug]
     );
   };
 
-  // Obtenir les soumissions filtrées
-  const getFilteredSubmissions = () => {
-    const folder = folders[selectedFolder];
-    if (!folder || !folder.filter) {
-      console.log('❌ Pas de dossier ou de filtre pour:', selectedFolder);
+  // 🔧 FONCTION CORRIGÉE - Obtenir les soumissions filtrées
+  const getFilteredSubmissions = (folderSlug = null) => {
+    const targetSlug = folderSlug || selectedFolder;
+    
+    if (!targetSlug) {
+      console.log('❌ Aucun dossier sélectionné');
       return [];
     }
     
-    const filtered = folder.filter(submissions);
-    console.log(`📊 Dossier "${folder.label}" (${selectedFolder}): ${filtered.length} soumissions`);
+    // Chercher le dossier par slug dans folders OU foldersList
+    let folder = folders[targetSlug];
     
-    // Debug spécial pour le dossier Soumissions
-    if (selectedFolder === 'projet_2025_soumissions') {
-      console.log('🔍 Debug soumissions complétées:');
-      const completed = submissions.filter(s => s.status === 'completed');
-      console.log(`- Total complétées: ${completed.length}`);
-      console.log(`- Filtrées: ${filtered.length}`);
+    // Si pas trouvé par slug, chercher dans la liste
+    if (!folder) {
+      folder = foldersList.find(f => 
+        f.slug === targetSlug || 
+        f.id === targetSlug ||
+        f.label?.toLowerCase() === targetSlug.toLowerCase()
+      );
     }
+    
+    if (!folder || !folder.filterFn) {
+      console.log('❌ Pas de dossier ou de filtre pour:', targetSlug);
+      return [];
+    }
+    
+    // Appliquer le filtre
+    const filtered = folder.filterFn(submissions);
+    console.log(`📊 Dossier "${folder.label}" (${targetSlug}): ${filtered.length} soumissions`);
     
     return filtered;
   };
 
-  // Organiser les dossiers en hiérarchie
+  // 🔧 FONCTION CORRIGÉE - Organiser les dossiers en hiérarchie
   const getOrganizedFolders = () => {
     const rootFolders = [];
     const folderMap = {};
-    const seenIds = new Set();
     
-    // Créer une map de tous les dossiers EN ÉLIMINANT LES DOUBLONS
-    Object.values(folders).forEach(folder => {
-      if (!seenIds.has(folder.id)) {
-        seenIds.add(folder.id);
-        folderMap[folder.id] = { ...folder, children: [] };
-      }
+    // D'abord, créer une map de tous les dossiers
+    foldersList.forEach(folder => {
+      const folderId = folder.slug || folder.id;
+      folderMap[folderId] = { 
+        ...folder, 
+        children: [] 
+      };
     });
     
-    // Forcer l'ordre pour les dossiers système
-    const systemOrder = {
-      'system_assignments': 0,
-      'system_pending': 1
-    };
-    
-    // Organiser en hiérarchie
-    Object.values(folderMap).forEach(folder => {
-      if (folder.parentId && folderMap[folder.parentId]) {
-        folderMap[folder.parentId].children.push(folder);
-      } else if (!folder.parentId) {
-        rootFolders.push(folder);
-      }
-    });
-    
-    // Trier par ordre avec priorité aux dossiers système
-    rootFolders.sort((a, b) => {
-      if (systemOrder.hasOwnProperty(a.id)) {
-        a.order = systemOrder[a.id];
-      }
-      if (systemOrder.hasOwnProperty(b.id)) {
-        b.order = systemOrder[b.id];
-      }
+    // Ensuite, organiser en hiérarchie
+    foldersList.forEach(folder => {
+      const folderId = folder.slug || folder.id;
       
-      const orderA = a.order !== undefined ? a.order : 999;
-      const orderB = b.order !== undefined ? b.order : 999;
-      return orderA - orderB;
+      if (folder.parentId) {
+        // Chercher le parent par slug OU id
+        const parent = folderMap[folder.parentId];
+        
+        if (parent) {
+          parent.children.push(folderMap[folderId]);
+        } else {
+          // Si parent non trouvé, l'ajouter comme root
+          console.warn(`⚠️ Parent non trouvé pour ${folder.label} (parent: ${folder.parentId})`);
+          rootFolders.push(folderMap[folderId]);
+        }
+      } else {
+        // Pas de parent = dossier racine
+        rootFolders.push(folderMap[folderId]);
+      }
     });
+    
+    // Trier par ordre
+    rootFolders.sort((a, b) => (a.order || 999) - (b.order || 999));
     
     // Trier aussi les sous-dossiers
     Object.values(folderMap).forEach(folder => {
-      if (folder.children) {
-        folder.children.sort((a, b) => {
-          const orderA = a.order !== undefined ? a.order : 999;
-          const orderB = b.order !== undefined ? b.order : 999;
-          return orderA - orderB;
-        });
+      if (folder.children && folder.children.length > 0) {
+        folder.children.sort((a, b) => (a.order || 999) - (b.order || 999));
       }
     });
     
     return rootFolders;
   };
 
-  // Rendu d'un dossier
+  // 🔧 FONCTION CORRIGÉE - Rendu d'un dossier
   const renderFolder = (folder, level = 0) => {
-    const isSelected = selectedFolder === folder.id;
+    const isSelected = selectedFolder === folder.slug;
     const hasChildren = folder.children && folder.children.length > 0;
-    const isExpanded = expandedFolders.includes(folder.id);
-    const count = folder.filter ? folder.filter(submissions).length : 0;
+    const isExpanded = expandedFolders.includes(folder.slug);
+    
+    // Calculer le count correctement
+    let count = 0;
+    if (folder.filterFn) {
+      count = folder.filterFn(submissions).length;
+    }
+    
+    // Si c'est un dossier parent, compter aussi les soumissions des enfants
+    if (hasChildren) {
+      folder.children.forEach(child => {
+        if (child.filterFn) {
+          count += child.filterFn(submissions).length;
+        }
+      });
+    }
     
     return (
-       <View>
+      <View key={folder.slug}>
         <View style={[
           styles.folderItem, 
           isSelected && styles.folderItemSelected
@@ -323,30 +397,30 @@ export default function App() {
           <TouchableOpacity
             style={[styles.folderContent, { paddingLeft: 16 + level * 20 }]}
             onPress={() => {
-              console.log('📁 Clic sur dossier:', folder.label, '| ID:', folder.id);
+              console.log('📁 Clic sur dossier:', folder.label, '| Slug:', folder.slug);
               
               // Si c'est un dossier parent avec des enfants, toggle l'expansion
               if (hasChildren && level === 0) {
                 console.log('📂 Toggle expansion pour:', folder.label);
-                toggleFolder(folder.id);
+                toggleFolder(folder.slug);
                 return;
               }
               
-              // Pour les dossiers système, ouvrir la vue séparée
-              if (folder.id === 'system_assignments' || 
-                  folder.id === 'system_pending' ||
-                  folder.id === 'projet_2025_soumissions') {
+              // Pour les dossiers système principaux, ouvrir la vue séparée
+              if (folder.slug === 'assignments' || 
+                  folder.slug === 'pending' ||
+                  folder.slug === 'completed') {
                 console.log('🎯 Navigation vers vue séparée:', folder.label);
-                setSelectedFolder(folder.id);
+                setSelectedFolder(folder.slug);
                 setCurrentView('folderView');
                 return;
               }
               
-              // Pour tous les autres dossiers (y compris les sous-dossiers), sélectionner
-              if (selectedFolder === folder.id) {
+              // Pour tous les autres dossiers (y compris sous-dossiers), sélectionner
+              if (selectedFolder === folder.slug) {
                 setSelectedFolder(null);
               } else {
-                setSelectedFolder(folder.id);
+                setSelectedFolder(folder.slug);
               }
             }}
           >
@@ -354,7 +428,7 @@ export default function App() {
               <TouchableOpacity
                 onPress={(e) => {
                   e.stopPropagation();
-                  toggleFolder(folder.id);
+                  toggleFolder(folder.slug);
                 }}
                 style={styles.chevronButton}
               >
@@ -390,11 +464,7 @@ export default function App() {
         {/* Sous-dossiers */}
         {hasChildren && isExpanded && (
           <View>
-            {folder.children.map((child, index) => (
-  <View key={`${child.id}_${index}`}>
-    {renderFolder(child, level + 1)}
-  </View>
-))}
+            {folder.children.map((child) => renderFolder(child, level + 1))}
           </View>
         )}
       </View>
@@ -447,7 +517,6 @@ export default function App() {
                           text: 'Non, nouveau',
                           style: 'cancel',
                           onPress: () => {
-                            // Naviguer sans charger le brouillon
                             global.skipDraftLoad = true;
                             handleNavigateToForm();
                           }
@@ -456,7 +525,6 @@ export default function App() {
                           text: 'Oui, restaurer',
                           style: 'default',
                           onPress: () => {
-                            // Naviguer et charger le brouillon
                             global.skipDraftLoad = false;
                             handleNavigateToForm();
                           }
@@ -470,7 +538,6 @@ export default function App() {
                 console.error('Erreur vérification brouillon:', error);
               }
               
-              // Pas de brouillon, navigation normale
               handleNavigateToForm();
             }}
           >
@@ -478,7 +545,61 @@ export default function App() {
             <Text style={styles.newButtonText}>Nouvelle soumission</Text>
           </TouchableOpacity>
         </View>
-        
+
+        {/* 🔧 BOUTONS DE MAINTENANCE TEMPORAIRES */}
+        {__DEV__ && (
+          <View style={styles.maintenanceContainer}>
+            <Text style={styles.maintenanceTitle}>🔧 Maintenance</Text>
+            
+            <TouchableOpacity
+              style={[styles.maintenanceButton, { backgroundColor: '#f39c12' }]}
+              onPress={async () => {
+                setLoading(true);
+                const result = await correctParentIds();
+                setLoading(false);
+                
+                if (result.success) {
+                  Alert.alert(
+                    '✅ Correction terminée',
+                    `${result.corrected} parentId corrigés\n${result.deleted} dossiers orphelins supprimés`
+                  );
+                }
+              }}
+            >
+              <Text style={styles.maintenanceButtonText}>Corriger parentId</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.maintenanceButton, { backgroundColor: '#e74c3c' }]}
+              onPress={() => {
+                Alert.alert(
+                  '⚠️ Nettoyer dossiers test',
+                  'Supprimer tous les dossiers test (yo, allo, etc.) ?',
+                  [
+                    { text: 'Annuler', style: 'cancel' },
+                    {
+                      text: 'Nettoyer',
+                      style: 'destructive',
+                      onPress: async () => {
+                        setLoading(true);
+                        const result = await cleanupTestFolders();
+                        setLoading(false);
+                        
+                        if (result.success) {
+                          Alert.alert('✅ Nettoyage terminé', `${result.deleted} dossiers supprimés`);
+                        }
+                      }
+                    }
+                  ]
+                );
+              }}
+            >
+              <Text style={styles.maintenanceButtonText}>Nettoyer dossiers test</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {/* FIN DES BOUTONS DE MAINTENANCE 🔧 */}
+
         {/* Vue unique avec tous les dossiers et contenus */}
         <View style={styles.mainContent}>
           <View style={styles.foldersSectionHeader}>
@@ -487,30 +608,16 @@ export default function App() {
           
           <ScrollView style={styles.mainScrollView} showsVerticalScrollIndicator={false}>
             {/* Rendu de tous les dossiers et leur contenu */}
-           {getOrganizedFolders().map((folder, folderIndex) => (
-  <View key={`folder_${folder.id}_${folderIndex}`}>
-    {renderFolder(folder)}
+            {getOrganizedFolders().map((folder) => (
+              <View key={folder.slug}>
+                {renderFolder(folder)}
                 
-                {/* Afficher les soumissions si le dossier est sélectionné */}
-                {selectedFolder === folder.id && 
-                 folder.id !== 'system_assignments' && 
-                 folder.id !== 'system_pending' && 
-                 folder.id !== 'projet_2025_soumissions' && (
+                {/* Afficher les soumissions si le dossier est sélectionné ET n'est pas un dossier système */}
+                {selectedFolder === folder.slug && 
+                 folder.slug !== 'assignments' && 
+                 folder.slug !== 'pending' && 
+                 folder.slug !== 'completed' && (
                   <View style={styles.submissionsContainer}>
-                    {/* Header du dossier avec options */}
-                    {folder.id === 'system_assignments' && (
-                      <View style={styles.folderHeaderBar}>
-                        <Text style={styles.folderHeaderTitle}>{folder.label}</Text>
-                        <TouchableOpacity
-                          style={styles.newAssignmentButton}
-                          onPress={() => setShowAssignmentModal(true)}
-                        >
-                          <FontAwesome5 name="plus" size={14} color="white" />
-                          <Text style={styles.newAssignmentText}>Nouvel assignment</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                    
                     {/* Liste des soumissions */}
                     {filteredSubmissions.length === 0 ? (
                       <Text style={styles.noSubmissionsText}>Aucune soumission dans ce dossier</Text>
@@ -520,8 +627,8 @@ export default function App() {
                           key={submission.id}
                           style={styles.submissionItem}
                           onPress={() => {
-                            setPreviousView('dashboard');
-                            handleNavigateToForm(submission);
+                            console.log('🎯 Clic sur soumission:', submission.id, submission.client?.adresse);
+                            handleOpenViewer(submission);
                           }}
                           onLongPress={() => {
                             Alert.alert(
@@ -566,15 +673,12 @@ export default function App() {
                           </View>
                           
                           <View style={styles.submissionRight}>
-                            <View style={[
-                              styles.statusBadge,
-                              submission.status === 'assignment' && styles.statusAssignment,
-                              submission.status === 'captured' && styles.statusPending
-                            ]}>
-                              <Text style={styles.statusText}>
-                                {submission.status === 'assignment' ? 'Assignment' : 'À compléter'}
-                              </Text>
-                            </View>
+                            {submission.photos && submission.photos.length > 0 && (
+                              <View style={styles.photoBadge}>
+                                <FontAwesome5 name="camera" size={10} color="#666" />
+                                <Text style={styles.photoCount}>{submission.photos.length}</Text>
+                              </View>
+                            )}
                             <FontAwesome5 name="chevron-right" size={14} color="#6c7680" />
                           </View>
                         </TouchableOpacity>
@@ -600,6 +704,23 @@ export default function App() {
           </View>
         </View>
         
+        {/* Modal SubmissionViewer */}
+        {showSubmissionViewer && viewerSubmission && (
+          <Modal
+            visible={showSubmissionViewer}
+            animationType="slide"
+            onRequestClose={() => setShowSubmissionViewer(false)}
+          >
+            <SubmissionViewer
+              submission={viewerSubmission}
+              onBack={() => {
+                setShowSubmissionViewer(false);
+                setViewerSubmission(null);
+              }}
+            />
+          </Modal>
+        )}
+        
         {/* Modals */}
         <AssignmentModal
           visible={showAssignmentModal}
@@ -610,11 +731,11 @@ export default function App() {
     );
   };
 
-  // Vue Folder séparée (MODIFIÉE AVEC LE NOUVEAU STYLE)
+  // Vue Folder séparée
   const renderFolderView = () => {
     const currentFolder = folders[selectedFolder];
     const filteredSubmissions = getFilteredSubmissions();
-    const canCreateNew = selectedFolder === 'system_assignments';
+    const canCreateNew = selectedFolder === 'assignments';
     
     return (
       <SafeAreaView style={styles.container}>
@@ -639,7 +760,7 @@ export default function App() {
           <View style={{ width: 40 }} />
         </View>
         
-        {/* Bouton nouvel assignment SEULEMENT pour "Aller prendre mesure" */}
+        {/* Bouton nouvel assignment */}
         {canCreateNew && (
           <View style={styles.newAssignmentContainer}>
             <TouchableOpacity
@@ -652,7 +773,7 @@ export default function App() {
           </View>
         )}
         
-        {/* Liste des soumissions AVEC LE NOUVEAU STYLE */}
+        {/* Liste des soumissions */}
         <ScrollView style={styles.assignmentsList}>
           {loading ? (
             <ActivityIndicator size="large" color="#5B9BD5" style={{ marginTop: 50 }} />
@@ -668,7 +789,6 @@ export default function App() {
               </Text>
             </View>
           ) : (
-            // NOUVEAU STYLE POUR LES CARTES
             filteredSubmissions.map(submission => {
               const isPending = submission.status === 'captured' || submission.status === 'pending' || !submission.status;
               const isCompleted = submission.status === 'completed';
@@ -694,7 +814,7 @@ export default function App() {
                   key={submission.id}
                   style={styles.assignmentCard}
                 >
-                  {/* Wrapper pour le longPress SANS onPress pour éviter le conflit */}
+                  {/* Wrapper pour le longPress */}
                   <TouchableOpacity
                     style={styles.cardTouchable}
                     onLongPress={() => {
@@ -722,9 +842,8 @@ export default function App() {
                       );
                     }}
                     delayLongPress={500}
-                    activeOpacity={1} // Pas d'effet visuel sur le tap simple
+                    activeOpacity={1}
                   >
-                    
                     {/* En-tête avec adresse et boutons */}
                     <View style={styles.cardHeader}>
                       <View style={styles.addressRow}>
@@ -738,7 +857,7 @@ export default function App() {
                       <View style={styles.rightActions}>
                         <TouchableOpacity 
                           onPress={(e) => {
-                            e.stopPropagation(); // Empêche la propagation
+                            e.stopPropagation();
                             openAddressInMaps(submission.client?.adresse || submission.displayName);
                           }}
                           style={[
@@ -792,19 +911,17 @@ export default function App() {
                     )}
                   </TouchableOpacity>
                   
-                  {/* Boutons Voir/Mesurer et Calculer - EN DEHORS du TouchableOpacity */}
+                  {/* Boutons Voir/Mesurer et Calculer */}
                   <View style={styles.actionButtons}>
                     <TouchableOpacity 
                       style={[styles.actionButton, styles.viewButton]}
                       onPress={() => {
                         console.log('🎯 Bouton Voir/Mesurer cliqué - Dossier:', selectedFolder);
                         
-                        if (selectedFolder === 'system_assignments') {
-                          // Pour "Aller prendre mesure", on navigue vers le formulaire
+                        if (selectedFolder === 'assignments') {
                           setPreviousView('folderView');
                           handleNavigateToForm(submission);
                         } else {
-                          // Pour TOUS les autres dossiers, on ouvre le viewer
                           console.log('✅ Ouverture du SubmissionViewer');
                           handleOpenViewer(submission);
                         }
@@ -812,11 +929,11 @@ export default function App() {
                     >
                       <FontAwesome5 name="eye" size={14} color="#374151" />
                       <Text style={styles.buttonText}>
-                        {selectedFolder === 'system_assignments' ? 'Mesurer' : 'Voir'}
+                        {selectedFolder === 'assignments' ? 'Mesurer' : 'Voir'}
                       </Text>
                     </TouchableOpacity>
                     
-                    {isPending && selectedFolder !== 'projet_2025_soumissions' && (
+                    {isPending && selectedFolder !== 'completed' && (
                       <TouchableOpacity 
                         style={[styles.actionButton, styles.calculateButton]}
                         onPress={() => {
@@ -839,7 +956,7 @@ export default function App() {
           )}
         </ScrollView>
         
-        {/* MODAL SUBMISSION VIEWER - AJOUT ICI */}
+        {/* Modal Submission Viewer */}
         {showSubmissionViewer && viewerSubmission && (
           <Modal
             visible={showSubmissionViewer}
@@ -877,7 +994,15 @@ export default function App() {
           setCurrentView(previousView || 'dashboard');
           setSelectedSubmission(null);
         }}
-        onComplete={() => { 
+        onComplete={async (submissionId) => {
+          // Mettre à jour le status si c'était un assignment
+          if (selectedSubmission?.status === 'assignment') {
+            await FirebaseSync.updateSubmission(submissionId, {
+              status: 'captured',
+              folderSlug: 'pending'
+            });
+          }
+          
           setCurrentView(previousView || 'dashboard');
           setSelectedSubmission(null);
         }}
@@ -894,7 +1019,7 @@ export default function App() {
   return renderDashboard();
 }
 
-// STYLES
+// STYLES (avec ajout des styles de maintenance)
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -953,6 +1078,37 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 8,
   },
+  
+  // 🔧 STYLES DE MAINTENANCE
+  maintenanceContainer: {
+    backgroundColor: '#34495e',
+    padding: 16,
+    marginHorizontal: 16,
+    marginTop: 10,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#e74c3c',
+  },
+  maintenanceTitle: {
+    color: '#e74c3c',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  maintenanceButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginBottom: 8,
+    alignItems: 'center',
+  },
+  maintenanceButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  
   mainContent: {
     flex: 1,
     backgroundColor: '#2c3e50',
@@ -1104,6 +1260,21 @@ const styles = StyleSheet.create({
   submissionRight: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  photoBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginRight: 8,
+  },
+  photoCount: {
+    color: '#fff',
+    fontSize: 11,
+    marginLeft: 4,
+    fontWeight: '600',
   },
   statusBadge: {
     paddingHorizontal: 10,
