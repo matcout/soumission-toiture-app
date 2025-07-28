@@ -22,49 +22,28 @@ import {
 import { db, storage } from './firebase';
 
 class FirebaseSync {
-  // 🏗️ DOSSIERS SYSTÈME PRÉDÉFINIS (avec slugs stables)
-  static SYSTEM_FOLDERS = {
-    assignments: {
-      slug: 'assignments',
-      label: 'Aller prendre mesure',
-      icon: 'clipboard-list',
-      iconDesktop: 'ClipboardList',
-      color: '#3b82f6',
-      order: 0,
-      type: 'system',
-      filter: { type: 'status', value: 'assignment' }
-    },
-    pending: {
-      slug: 'pending',
-      label: 'À compléter',
-      icon: 'clock',
-      iconDesktop: 'Clock',
-      color: '#f59e0b',
-      order: 1,
-      type: 'system',
-      filter: { type: 'status', value: 'captured' }
-    },
-    completed: {
-      slug: 'completed',
-      label: 'Soumissions',
-      icon: 'check-circle',
-      iconDesktop: 'CheckCircle2',
-      color: '#10b981',
-      order: 2,
-      type: 'system',
-      filter: { type: 'status', value: 'completed' },
-      parentId: 'projet_2025'
-    },
-    projet_2025: {
-      slug: 'projet_2025',
-      label: 'Projet 2025',
-      icon: 'folder',
-      iconDesktop: 'Folder',
-      color: '#8b5cf6',
-      order: 3,
-      type: 'system',
-      filter: { type: 'year', value: 2025 }
-    }
+// NOUVELLE VERSION NETTOYÉE (seulement les vrais dossiers système) :
+static SYSTEM_FOLDERS = {
+  assignments: {
+    slug: 'assignments',
+    label: 'Aller prendre mesure',
+    icon: 'clipboard-list',
+    iconDesktop: 'ClipboardList',
+    color: '#3b82f6',
+    order: 0,
+    type: 'system',
+    filter: { type: 'status', value: 'assignment' }
+  },
+  pending: {
+    slug: 'pending',
+    label: 'À compléter',
+    icon: 'clock',
+    iconDesktop: 'Clock',
+    color: '#f59e0b',
+    order: 1,
+    type: 'system',
+    filter: { type: 'status', value: 'captured' }
+  }
   };
 
   // 🚀 INITIALISATION

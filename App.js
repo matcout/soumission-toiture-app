@@ -286,38 +286,53 @@ export default function App() {
     );
   };
 
-  // 🔧 FONCTION CORRIGÉE - Obtenir les soumissions filtrées
-  const getFilteredSubmissions = (folderSlug = null) => {
-    const targetSlug = folderSlug || selectedFolder;
-    
-    if (!targetSlug) {
-      console.log('❌ Aucun dossier sélectionné');
-      return [];
-    }
-    
-    // Chercher le dossier par slug dans folders OU foldersList
-    let folder = folders[targetSlug];
-    
-    // Si pas trouvé par slug, chercher dans la liste
-    if (!folder) {
-      folder = foldersList.find(f => 
-        f.slug === targetSlug || 
-        f.id === targetSlug ||
-        f.label?.toLowerCase() === targetSlug.toLowerCase()
-      );
-    }
-    
-    if (!folder || !folder.filterFn) {
-      console.log('❌ Pas de dossier ou de filtre pour:', targetSlug);
-      return [];
-    }
-    
-    // Appliquer le filtre
-    const filtered = folder.filterFn(submissions);
-    console.log(`📊 Dossier "${folder.label}" (${targetSlug}): ${filtered.length} soumissions`);
-    
+ const getFilteredSubmissions = (folderSlug = null) => {
+  const targetSlug = folderSlug || selectedFolder;
+  
+  if (!targetSlug) {
+    console.log('❌ Aucun dossier sélectionné');
+    return [];
+  }
+  
+  console.log(`📱 Mobile - Filtrage pour: "${targetSlug}"`);
+  
+  // 🔧 CAS SPÉCIAUX : Dossiers custom Soumissions
+  if (targetSlug === 'projet_2025_soumissions') {
+    const filtered = submissions.filter(s => s.folderId === 'projet_2025_soumissions');
+    console.log(`📱 Mobile - Soumissions custom: ${filtered.length} soumissions`);
     return filtered;
-  };
+  }
+  
+  // Chercher le dossier par slug dans folders OU foldersList
+  let folder = folders[targetSlug];
+  
+  // Si pas trouvé par slug, chercher dans la liste
+  if (!folder) {
+    folder = foldersList.find(f => 
+      f.slug === targetSlug || 
+      f.id === targetSlug ||
+      f.label?.toLowerCase() === targetSlug.toLowerCase()
+    );
+  }
+  
+  if (!folder) {
+    console.log('❌ Dossier non trouvé:', targetSlug);
+    return [];
+  }
+  
+  // Si le dossier a une fonction de filtre
+  if (folder.filterFn) {
+    const filtered = folder.filterFn(submissions);
+    console.log(`📱 Mobile - Filtre système "${folder.label}": ${filtered.length} soumissions`);
+    return filtered;
+  }
+  
+  // Fallback pour autres dossiers personnalisés
+  const filtered = submissions.filter(s => s.folderId === targetSlug);
+  console.log(`📱 Mobile - Filtre folderId "${targetSlug}": ${filtered.length} soumissions`);
+  
+  return filtered;
+};
 
   // 🔧 FONCTION CORRIGÉE - Organiser les dossiers en hiérarchie
   const getOrganizedFolders = () => {
@@ -398,6 +413,10 @@ export default function App() {
             style={[styles.folderContent, { paddingLeft: 16 + level * 20 }]}
             onPress={() => {
               console.log('📁 Clic sur dossier:', folder.label, '| Slug:', folder.slug);
+              console.log('📱 CLIC DOSSIER:', folder.id, '| Label:', folder.label);
+              setSelectedFolder(folder.id);
+              console.log('📱 selectedFolder défini à:', folder.id);
+              setCurrentView('folderView');
               
               // Si c'est un dossier parent avec des enfants, toggle l'expansion
               if (hasChildren && level === 0) {
@@ -475,6 +494,29 @@ export default function App() {
   const renderDashboard = () => {
     const currentFolder = folders[selectedFolder];
     const filteredSubmissions = getFilteredSubmissions();
+
+    // 🔧 DANS renderDashboard(), APRÈS la ligne "const filteredSubmissions = getFilteredSubmissions();"
+// AJOUTEZ CES LIGNES DE DEBUG :
+
+// DEBUG TEMPORAIRE
+console.log('🔍 DEBUG MOBILE renderDashboard:');
+console.log('   📁 selectedFolder:', selectedFolder);
+console.log('   📂 currentFolder:', currentFolder);
+console.log('   📄 submissions total:', submissions.length);
+console.log('   🎯 filteredSubmissions:', filteredSubmissions.length);
+
+// Test spécifique pour notre dossier
+if (selectedFolder === 'projet_2025_soumissions') {
+  const directTest = submissions.filter(s => s.folderId === 'projet_2025_soumissions');
+  console.log('   🔧 Test direct projet_2025_soumissions:', directTest.length);
+  directTest.forEach((s, i) => {
+    console.log(`      ${i+1}. ${s.client?.adresse || s.id}`);
+  });
+}
+
+// Lister tous les folderId disponibles
+const folderIds = [...new Set(submissions.map(s => s.folderId).filter(Boolean))];
+console.log('   📋 FolderIds disponibles:', folderIds);
     
     return (
       <SafeAreaView style={styles.container}>
@@ -546,59 +588,7 @@ export default function App() {
           </TouchableOpacity>
         </View>
 
-        {/* 🔧 BOUTONS DE MAINTENANCE TEMPORAIRES */}
-        {__DEV__ && (
-          <View style={styles.maintenanceContainer}>
-            <Text style={styles.maintenanceTitle}>🔧 Maintenance</Text>
-            
-            <TouchableOpacity
-              style={[styles.maintenanceButton, { backgroundColor: '#f39c12' }]}
-              onPress={async () => {
-                setLoading(true);
-                const result = await correctParentIds();
-                setLoading(false);
-                
-                if (result.success) {
-                  Alert.alert(
-                    '✅ Correction terminée',
-                    `${result.corrected} parentId corrigés\n${result.deleted} dossiers orphelins supprimés`
-                  );
-                }
-              }}
-            >
-              <Text style={styles.maintenanceButtonText}>Corriger parentId</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={[styles.maintenanceButton, { backgroundColor: '#e74c3c' }]}
-              onPress={() => {
-                Alert.alert(
-                  '⚠️ Nettoyer dossiers test',
-                  'Supprimer tous les dossiers test (yo, allo, etc.) ?',
-                  [
-                    { text: 'Annuler', style: 'cancel' },
-                    {
-                      text: 'Nettoyer',
-                      style: 'destructive',
-                      onPress: async () => {
-                        setLoading(true);
-                        const result = await cleanupTestFolders();
-                        setLoading(false);
-                        
-                        if (result.success) {
-                          Alert.alert('✅ Nettoyage terminé', `${result.deleted} dossiers supprimés`);
-                        }
-                      }
-                    }
-                  ]
-                );
-              }}
-            >
-              <Text style={styles.maintenanceButtonText}>Nettoyer dossiers test</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-        {/* FIN DES BOUTONS DE MAINTENANCE 🔧 */}
+       
 
         {/* Vue unique avec tous les dossiers et contenus */}
         <View style={styles.mainContent}>
@@ -1019,7 +1009,7 @@ export default function App() {
   return renderDashboard();
 }
 
-// STYLES (avec ajout des styles de maintenance)
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -1079,35 +1069,6 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   
-  // 🔧 STYLES DE MAINTENANCE
-  maintenanceContainer: {
-    backgroundColor: '#34495e',
-    padding: 16,
-    marginHorizontal: 16,
-    marginTop: 10,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#e74c3c',
-  },
-  maintenanceTitle: {
-    color: '#e74c3c',
-    fontSize: 16,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-  maintenanceButton: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    marginBottom: 8,
-    alignItems: 'center',
-  },
-  maintenanceButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
-  },
   
   mainContent: {
     flex: 1,
