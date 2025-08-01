@@ -17,6 +17,7 @@ import { FontAwesome5 } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { collection, getDocs, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db } from './firebase';
+import { TextInput } from 'react-native';
 
 // Import du nouveau système unifié
 import FirebaseSync from './firebaseSync';
@@ -25,6 +26,20 @@ import FirebaseSync from './firebaseSync';
 import SoumissionForm from './components/SoumissionForm';
 import AssignmentModal from './AssignmentModal';
 import SubmissionViewer from './components/SubmissionViewer';
+
+
+
+const safeText = (value, fallback = '') => {
+  if (value === null || value === undefined) {
+    console.warn('⚠️ safeText: valeur null/undefined:', value);
+    return fallback;
+  }
+  if (typeof value === 'object') {
+    console.warn('⚠️ safeText: objet détecté:', value);
+    return JSON.stringify(value);
+  }
+  return String(value);
+};
 
 // 🔧 FONCTIONS DE MAINTENANCE
 const correctParentIds = async () => {
@@ -121,15 +136,15 @@ export default function App() {
   // États navigation
   const [currentView, setCurrentView] = useState('dashboard');
   const [previousView, setPreviousView] = useState('dashboard');
-  const [selectedFolder, setSelectedFolder] = useState(null);
-  const [selectedSubmission, setSelectedSubmission] = useState(null);
+const [selectedFolder, setSelectedFolder] = useState('assignments'); 
   
   // États UI
-  const [expandedFolders, setExpandedFolders] = useState(['projet_2025']); // Slug au lieu d'ID
+  const [expandedFolders, setExpandedFolders] = useState([]); // Slug au lieu d'ID
   const [showAssignmentModal, setShowAssignmentModal] = useState(false);
   const [showSubmissionViewer, setShowSubmissionViewer] = useState(false);
   const [viewerSubmission, setViewerSubmission] = useState(null);
-
+const [selectedSubmission, setSelectedSubmission] = useState(null);
+const [searchQuery, setSearchQuery] = useState('');
   // Initialisation et synchronisation avec FirebaseSync
   useEffect(() => {
     let unsubscribeSubmissions = null;
@@ -145,14 +160,19 @@ export default function App() {
         
         if (initResult.success) {
           // S'abonner aux dossiers
-          unsubscribeFolders = FirebaseSync.subscribeFolders((result) => {
-            if (result.success) {
-              setFolders(result.data);
-              setFoldersList(result.list);
-              console.log(`✅ ${result.list.length} dossiers synchronisés`);
-            }
-          });
-          
+unsubscribeFolders = FirebaseSync.subscribeFolders((result) => {
+  if (result.success) {
+    // 🔍 DEBUG POUR INVESTIGUER L'ORDRE
+    console.log('📁 DOSSIERS REÇUS DE FIREBASE:');
+    result.list.forEach(folder => {
+      console.log(`   - ${folder.label}: order=${folder.order}, slug=${folder.slug}`);
+    });
+    
+    setFolders(result.data);
+    setFoldersList(result.list);
+    console.log(`✅ ${result.list.length} dossiers synchronisés`);
+  }
+});
           // S'abonner aux soumissions
           unsubscribeSubmissions = FirebaseSync.subscribeSubmissions((result) => {
             if (result.success) {
@@ -194,9 +214,57 @@ export default function App() {
     }
   }, [foldersList]);
 
+
+  
+  useEffect(() => {
+  if (folders && Object.keys(folders).length > 0 && submissions.length > 0) {
+    console.log('\n🔍 === DEBUG RAPIDE ===');
+    
+    // 1. Les dossiers système existent ?
+    console.log('Dossier assignments existe ?', !!folders['assignments']);
+    console.log('Dossier pending existe ?', !!folders['pending']);
+    
+    // 2. Combien de soumissions par folderId ?
+    const assignmentCount = submissions.filter(s => s.folderId === 'assignments').length;
+    const pendingCount = submissions.filter(s => s.folderId === 'pending').length;
+    
+    console.log(`Soumissions avec folderId "assignments": ${assignmentCount}`);
+    console.log(`Soumissions avec folderId "pending": ${pendingCount}`);
+    
+    // 3. Exemple d'une soumission
+    if (submissions[0]) {
+      console.log('\nExemple soumission:', {
+        adresse: submissions[0].client?.adresse,
+        folderId: submissions[0].folderId,
+        folderIdType: typeof submissions[0].folderId
+      });
+    }
+    
+    console.log('=== FIN DEBUG ===\n');
+  }
+}, [folders, submissions]);
+
   // Créer un nouvel assignment
-  const handleCreateAssignment = async (assignmentData) => {
-    try {
+ const handleCreateAssignment = async (assignmentData, isEditMode = false) => {
+  try {
+    if (isEditMode) {
+      // Mode édition : assignmentData contient déjà toutes les données
+      const result = await FirebaseSync.updateSubmission(assignmentData.id, {
+        client: assignmentData.client,
+        notes: assignmentData.notes,
+        displayName: assignmentData.displayName,
+        updatedAt: assignmentData.updatedAt
+      });
+      
+      if (result.success) {
+        Alert.alert('Succès', 'Assignment modifié avec succès');
+        setShowAssignmentModal(false);
+        setSelectedSubmission(null);
+      } else {
+        Alert.alert('Erreur', result.error || 'Impossible de modifier l\'assignment');
+      }
+    } else {
+      // Mode création : créer un nouvel assignment
       const result = await FirebaseSync.createAssignment({
         client: assignmentData.client,
         notes: assignmentData.notes,
@@ -209,10 +277,11 @@ export default function App() {
       } else {
         Alert.alert('Erreur', result.error || 'Impossible de créer l\'assignment');
       }
-    } catch (error) {
-      Alert.alert('Erreur', 'Impossible de créer l\'assignment');
     }
-  };
+  } catch (error) {
+    Alert.alert('Erreur', 'Une erreur est survenue : ' + error.message);
+  }
+};
 
   const handleDeleteSubmission = (submissionId, submissionName) => {
     Alert.alert(
@@ -286,9 +355,19 @@ export default function App() {
     );
   };
 
- const getFilteredSubmissions = (folderSlug = null) => {
+// 1. MODIFIER votre fonction getFilteredSubmissions existante
+// Remplacez toute votre fonction getFilteredSubmissions par celle-ci :
+
+const getFilteredSubmissions = (folderSlug = null) => {
   const targetSlug = folderSlug || selectedFolder;
   
+  // 🔍 DEBUG TEMPORAIRE
+  console.log('🔍 MOBILE DEBUG getFilteredSubmissions:');
+  console.log('   targetSlug:', targetSlug);
+  console.log('   folders keys:', Object.keys(folders));
+  console.log('   foldersList:', foldersList.map(f => `${f.label} (${f.id})`));
+  console.log('   submissions folderId:', submissions.map(s => s.folderId));
+
   if (!targetSlug) {
     console.log('❌ Aucun dossier sélectionné');
     return [];
@@ -298,8 +377,19 @@ export default function App() {
   
   // 🔧 CAS SPÉCIAUX : Dossiers custom Soumissions
   if (targetSlug === 'projet_2025_soumissions') {
-    const filtered = submissions.filter(s => s.folderId === 'projet_2025_soumissions');
+    let filtered = submissions.filter(s => s.folderId === 'projet_2025_soumissions');
     console.log(`📱 Mobile - Soumissions custom: ${filtered.length} soumissions`);
+    
+    // NOUVEAU : Appliquer le filtre de recherche
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      filtered = filtered.filter(submission => {
+        const address = submission.client?.adresse?.toLowerCase() || '';
+        return address.includes(query);
+      });
+      console.log(`🔍 Recherche "${query}": ${filtered.length} résultats`);
+    }
+    
     return filtered;
   }
   
@@ -322,658 +412,878 @@ export default function App() {
   
   // Si le dossier a une fonction de filtre
   if (folder.filterFn) {
-    const filtered = folder.filterFn(submissions);
+    let filtered = folder.filterFn(submissions);
     console.log(`📱 Mobile - Filtre système "${folder.label}": ${filtered.length} soumissions`);
+    
+    // NOUVEAU : Appliquer le filtre de recherche
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      filtered = filtered.filter(submission => {
+        const address = submission.client?.adresse?.toLowerCase() || '';
+        return address.includes(query);
+      });
+      console.log(`🔍 Recherche "${query}": ${filtered.length} résultats`);
+    }
+    
     return filtered;
   }
   
   // Fallback pour autres dossiers personnalisés
-  const filtered = submissions.filter(s => s.folderId === targetSlug);
+  let filtered = submissions.filter(s => s.folderId === targetSlug);
   console.log(`📱 Mobile - Filtre folderId "${targetSlug}": ${filtered.length} soumissions`);
+  
+  // NOUVEAU : Appliquer le filtre de recherche
+  if (searchQuery.trim()) {
+    const query = searchQuery.toLowerCase().trim();
+    filtered = filtered.filter(submission => {
+      const address = submission.client?.adresse?.toLowerCase() || '';
+      return address.includes(query);
+    });
+    console.log(`🔍 Recherche "${query}": ${filtered.length} résultats`);
+  }
   
   return filtered;
 };
 
   // 🔧 FONCTION CORRIGÉE - Organiser les dossiers en hiérarchie
   const getOrganizedFolders = () => {
-    const rootFolders = [];
-    const folderMap = {};
+  // 🔍 DEBUG - Voir l'ordre AVANT tri
+  console.log('🔍 AVANT TRI - Ordre des dossiers:');
+  foldersList.forEach(folder => {
+    console.log(`   ${folder.label}: order=${folder.order} (type: ${typeof folder.order})`);
+  });
+
+  const rootFolders = [];
+  const folderMap = {};
+  
+  // D'abord, créer une map de tous les dossiers
+  foldersList.forEach(folder => {
+    const folderId = folder.slug || folder.id;
+    folderMap[folderId] = { 
+      ...folder, 
+      children: [] 
+    };
+  });
+  
+  // Ensuite, organiser en hiérarchie
+  foldersList.forEach(folder => {
+    const folderId = folder.slug || folder.id;
     
-    // D'abord, créer une map de tous les dossiers
-    foldersList.forEach(folder => {
-      const folderId = folder.slug || folder.id;
-      folderMap[folderId] = { 
-        ...folder, 
-        children: [] 
-      };
-    });
-    
-    // Ensuite, organiser en hiérarchie
-    foldersList.forEach(folder => {
-      const folderId = folder.slug || folder.id;
+    if (folder.parentId) {
+      // Chercher le parent par slug OU id
+      const parent = folderMap[folder.parentId];
       
-      if (folder.parentId) {
-        // Chercher le parent par slug OU id
-        const parent = folderMap[folder.parentId];
-        
-        if (parent) {
-          parent.children.push(folderMap[folderId]);
-        } else {
-          // Si parent non trouvé, l'ajouter comme root
-          console.warn(`⚠️ Parent non trouvé pour ${folder.label} (parent: ${folder.parentId})`);
-          rootFolders.push(folderMap[folderId]);
-        }
+      if (parent) {
+        parent.children.push(folderMap[folderId]);
       } else {
-        // Pas de parent = dossier racine
+        // Si parent non trouvé, l'ajouter comme root
+        console.warn(`⚠️ Parent non trouvé pour ${folder.label} (parent: ${folder.parentId})`);
         rootFolders.push(folderMap[folderId]);
       }
-    });
-    
-    // Trier par ordre
-    rootFolders.sort((a, b) => (a.order || 999) - (b.order || 999));
-    
-    // Trier aussi les sous-dossiers
-    Object.values(folderMap).forEach(folder => {
-      if (folder.children && folder.children.length > 0) {
-        folder.children.sort((a, b) => (a.order || 999) - (b.order || 999));
-      }
-    });
-    
-    return rootFolders;
-  };
+    } else {
+      // Pas de parent = dossier racine
+      rootFolders.push(folderMap[folderId]);
+    }
+  });
+  console.log('🔍 ROOT FOLDERS AVANT TRI:');
+rootFolders.forEach(folder => {
+  console.log(`   - ${folder.label}: order=${folder.order}, slug=${folder.slug}`);
+});
+  // Trier par ordre
+  rootFolders.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+  
+  console.log('🔍 TEST FONCTION TRI:');
+const testArray = [
+  { label: 'Test A', order: 1 },
+  { label: 'Test B', order: 0 },
+  { label: 'Test C', order: 2 }
+];
+testArray.sort((a, b) => (a.order || 999) - (b.order || 999));
+console.log('Résultat test:', testArray.map(t => `${t.label}:${t.order}`));
+
+// 🔍 DEBUG - Voir l'ordre APRÈS tri
+console.log('🔍 APRÈS TRI - Ordre final:');
+rootFolders.forEach((folder, index) => {
+  console.log(`   ${index + 1}. ${folder.label}: order=${folder.order} (type: ${typeof folder.order})`);
+});
+  // 🔍 DEBUG - Voir l'ordre APRÈS tri
+  console.log('🔍 APRÈS TRI - Ordre final:');
+  rootFolders.forEach((folder, index) => {
+    console.log(`   ${index + 1}. ${folder.label}: order=${folder.order}`);
+  });
+  
+  // Trier aussi les sous-dossiers
+  Object.values(folderMap).forEach(folder => {
+    if (folder.children && folder.children.length > 0) {
+      folder.children.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+    }
+  });
+  
+  return rootFolders;
+};
 
   // 🔧 FONCTION CORRIGÉE - Rendu d'un dossier
-  const renderFolder = (folder, level = 0) => {
-    const isSelected = selectedFolder === folder.slug;
-    const hasChildren = folder.children && folder.children.length > 0;
-    const isExpanded = expandedFolders.includes(folder.slug);
-    
-    // Calculer le count correctement
-    let count = 0;
-    if (folder.filterFn) {
+ const renderFolder = (folder, level = 0) => {
+  // ✅ VÉRIFICATIONS DE SÉCURITÉ
+  if (!folder || !folder.slug || folder.slug === 'undefined') {
+    console.warn('⚠️ renderFolder: Dossier ignoré:', folder);
+    return null;
+  }
+
+  console.log('🔍 renderFolder DEBUG:', {
+    label: folder?.label,
+    labelType: typeof folder?.label,
+    slug: folder?.slug,
+    hasLabel: !!folder?.label
+  });
+
+  const isSelected = selectedFolder === folder.slug;
+  const hasChildren = folder.children && folder.children.length > 0;
+  const isExpanded = expandedFolders.includes(folder.slug);
+  
+  // Calculer le count correctement
+  let count = 0;
+  if (folder.filterFn) {
+    try {
       count = folder.filterFn(submissions).length;
+    } catch (error) {
+      console.warn('Erreur calcul count:', error);
+      count = 0;
     }
-    
-    // Si c'est un dossier parent, compter aussi les soumissions des enfants
-    if (hasChildren) {
-      folder.children.forEach(child => {
-        if (child.filterFn) {
+  }
+  
+  // Si c'est un dossier parent, compter aussi les soumissions des enfants
+  if (hasChildren) {
+    folder.children.forEach(child => {
+      if (child.filterFn) {
+        try {
           count += child.filterFn(submissions).length;
+        } catch (error) {
+          console.warn('Erreur calcul count enfant:', error);
         }
-      });
-    }
-    
-    return (
-      <View key={folder.slug}>
-        <View style={[
-          styles.folderItem, 
-          isSelected && styles.folderItemSelected
-        ]}>
-          <TouchableOpacity
-            style={[styles.folderContent, { paddingLeft: 16 + level * 20 }]}
-            onPress={() => {
-              console.log('📁 Clic sur dossier:', folder.label, '| Slug:', folder.slug);
-              console.log('📱 CLIC DOSSIER:', folder.id, '| Label:', folder.label);
+      }
+    });
+  }
+  
+  return (
+    <View key={safeText(folder.slug, `folder-${Math.random()}`)}>
+      <View style={[
+        styles.folderItem, 
+        isSelected && styles.folderItemSelected
+      ]}>
+        <TouchableOpacity
+          style={[styles.folderContent, { paddingLeft: 16 + level * 20 }]}
+          onPress={() => {
+            console.log('📁 Clic sur dossier:', safeText(folder.label), '| Slug:', safeText(folder.slug));
+            
+            // 🔧 LOGIQUE UNIVERSELLE : Tous les dossiers "Projet XXXX"
+            const isProjectFolder = folder.label?.match(/^Projet \d{4}$/i);
+            
+            if (isProjectFolder) {
+              console.log(`📁 Clic sur ${safeText(folder.label)} - EXPANSION SEULEMENT`);
+             
+              // ✅ SEULEMENT TOGGLE L'EXPANSION
+              if (expandedFolders.includes(folder.slug)) {
+                setExpandedFolders(prev => prev.filter(slug => slug !== folder.slug));
+                console.log(`📁 ${safeText(folder.label)} fermé`);
+              } else {
+                setExpandedFolders(prev => [...prev, folder.slug]);
+                console.log(`📁 ${safeText(folder.label)} ouvert`);
+              }
+             
+              console.log('📁 selectedFolder reste:', selectedFolder);
+              return;
+             
+            } else {
+              // ✅ COMPORTEMENT NORMAL pour tous les autres dossiers
               setSelectedFolder(folder.id);
               console.log('📱 selectedFolder défini à:', folder.id);
               setCurrentView('folderView');
-              
+             
               // Si c'est un dossier parent avec des enfants, toggle l'expansion
               if (hasChildren && level === 0) {
-                console.log('📂 Toggle expansion pour:', folder.label);
+                console.log('📂 Toggle expansion pour:', safeText(folder.label));
                 toggleFolder(folder.slug);
                 return;
               }
-              
+             
               // Pour les dossiers système principaux, ouvrir la vue séparée
-              if (folder.slug === 'assignments' || 
+              if (folder.slug === 'assignments' ||
                   folder.slug === 'pending' ||
                   folder.slug === 'completed') {
-                console.log('🎯 Navigation vers vue séparée:', folder.label);
+                console.log('🎯 Navigation vers vue séparée:', safeText(folder.label));
                 setSelectedFolder(folder.slug);
                 setCurrentView('folderView');
                 return;
               }
-              
+             
               // Pour tous les autres dossiers (y compris sous-dossiers), sélectionner
               if (selectedFolder === folder.slug) {
                 setSelectedFolder(null);
               } else {
                 setSelectedFolder(folder.slug);
               }
-            }}
-          >
-            {hasChildren && level === 0 && (
-              <TouchableOpacity
-                onPress={(e) => {
-                  e.stopPropagation();
-                  toggleFolder(folder.slug);
-                }}
-                style={styles.chevronButton}
-              >
-                <FontAwesome5
-                  name={isExpanded ? 'chevron-down' : 'chevron-right'}
-                  size={12}
-                  color="#6c7680"
-                />
-              </TouchableOpacity>
-            )}
-            
-            <FontAwesome5
-              name={folder.icon || 'folder'}
-              size={16}
-              color={folder.color || '#6b7280'}
-              style={styles.folderIcon}
-            />
-            
-            <Text style={[styles.folderLabel, isSelected && styles.folderLabelSelected]}>
-              {folder.label}
-            </Text>
-          </TouchableOpacity>
+            }
+          }}
+        >
+          {hasChildren && level === 0 && (
+            <TouchableOpacity
+              onPress={(e) => {
+                e.stopPropagation();
+                toggleFolder(folder.slug);
+              }}
+              style={styles.chevronButton}
+            >
+              <FontAwesome5
+                name={isExpanded ? 'chevron-down' : 'chevron-right'}
+                size={12}
+                color="#6c7680"
+              />
+            </TouchableOpacity>
+          )}
           
-          <View style={styles.folderActions}>
-            {count > 0 && (
-              <View style={styles.folderBadge}>
-                <Text style={styles.folderBadgeText}>{count}</Text>
-              </View>
-            )}
-          </View>
-        </View>
+          <FontAwesome5
+            name={safeText(folder.icon, 'folder')}
+            size={16}
+            color={safeText(folder.color, '#6b7280')}
+            style={styles.folderIcon}
+          />
+          
+          <Text style={[styles.folderLabel, isSelected && styles.folderLabelSelected]}>
+            {safeText(folder.label, 'Dossier sans nom')}
+          </Text>
+        </TouchableOpacity>
         
-        {/* Sous-dossiers */}
-        {hasChildren && isExpanded && (
-          <View>
-            {folder.children.map((child) => renderFolder(child, level + 1))}
-          </View>
-        )}
+        <View style={styles.folderActions}>
+          {count > 0 && !folder.label?.match(/^Projet \d{4}$/i) && (
+            <View style={styles.folderBadge}>
+              <Text style={styles.folderBadgeText}>{safeText(count, '0')}</Text>
+            </View>
+          )}
+        </View>
       </View>
-    );
-  };
+      
+      {/* Sous-dossiers */}
+      {hasChildren && isExpanded && (
+        <View>
+          {folder.children.map((child) => {
+            // ✅ VÉRIFICATION DES ENFANTS AUSSI
+            if (!child || !child.slug || child.slug === 'undefined') {
+              return null;
+            }
+            return renderFolder(child, level + 1);
+          })}
+        </View>
+      )}
+    </View>
+  );
+};
 
   // Dashboard principal
-  const renderDashboard = () => {
-    const currentFolder = folders[selectedFolder];
-    const filteredSubmissions = getFilteredSubmissions();
+const renderDashboard = () => {
+  const currentFolder = folders[selectedFolder];
+  const filteredSubmissions = getFilteredSubmissions();
 
-    // 🔧 DANS renderDashboard(), APRÈS la ligne "const filteredSubmissions = getFilteredSubmissions();"
-// AJOUTEZ CES LIGNES DE DEBUG :
+  console.log('🔍 DEBUG MOBILE renderDashboard:');
+  console.log('   📁 selectedFolder:', selectedFolder);
+  console.log('   📄 submissions total:', submissions.length);
+  console.log('   🎯 filteredSubmissions:', filteredSubmissions.length);
 
-// DEBUG TEMPORAIRE
-console.log('🔍 DEBUG MOBILE renderDashboard:');
-console.log('   📁 selectedFolder:', selectedFolder);
-console.log('   📂 currentFolder:', currentFolder);
-console.log('   📄 submissions total:', submissions.length);
-console.log('   🎯 filteredSubmissions:', filteredSubmissions.length);
-
-// Test spécifique pour notre dossier
-if (selectedFolder === 'projet_2025_soumissions') {
-  const directTest = submissions.filter(s => s.folderId === 'projet_2025_soumissions');
-  console.log('   🔧 Test direct projet_2025_soumissions:', directTest.length);
-  directTest.forEach((s, i) => {
-    console.log(`      ${i+1}. ${s.client?.adresse || s.id}`);
-  });
-}
-
-// Lister tous les folderId disponibles
-const folderIds = [...new Set(submissions.map(s => s.folderId).filter(Boolean))];
-console.log('   📋 FolderIds disponibles:', folderIds);
-    
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar style="light" backgroundColor="#1e2936" />
-        
-        {/* Header principal */}
-        <View style={styles.mainHeader}>
-          <View style={styles.appInfo}>
-            <View style={styles.appIcon}>
-              <FontAwesome5 name="home" size={24} color="white" />
-            </View>
-            <View>
-              <Text style={styles.appTitle}>Soumission Toiture</Text>
-            </View>
+  const folderIds = [...new Set(submissions.map(s => s.folderId).filter(Boolean))];
+  console.log('   📋 FolderIds disponibles:', folderIds);
+  
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#f8fafc' }}>
+      <StatusBar style="dark" backgroundColor="#f8fafc"/>
+      
+      {/* Header principal */}
+      <View style={styles.mainHeader}>
+        <View style={styles.appInfo}>
+          <View style={styles.appIcon}>
+            <FontAwesome5 name="home" size={24} color="white"/>
+          </View>
+          <View>
+            <Text style={styles.appTitle}>Soumission Toiture</Text>
           </View>
         </View>
-        
-        {/* Bouton nouvelle soumission */}
-        <View style={styles.newButtonContainer}>
-          <TouchableOpacity
-            style={styles.newButton}
-            onPress={async () => {
-              setPreviousView('dashboard');
-              
-              try {
-                // Vérifier s'il y a un brouillon
-                const draftString = await AsyncStorage.getItem('SOUMISSION_DRAFT');
-                if (draftString) {
-                  const draft = JSON.parse(draftString);
-                  const hasData = draft.formData?.nom || draft.formData?.adresse || 
-                                 draft.formData?.telephone || draft.formData?.courriel || 
-                                 draft.formData?.notes || draft.photos?.length > 0;
-                  
-                  if (hasData) {
-                    Alert.alert(
-                      'Brouillon trouvé',
-                      'Un brouillon de soumission a été trouvé. Voulez-vous le restaurer ?',
-                      [
-                        {
-                          text: 'Non, nouveau',
-                          style: 'cancel',
-                          onPress: () => {
-                            global.skipDraftLoad = true;
-                            handleNavigateToForm();
-                          }
-                        },
-                        {
-                          text: 'Oui, restaurer',
-                          style: 'default',
-                          onPress: () => {
-                            global.skipDraftLoad = false;
-                            handleNavigateToForm();
-                          }
-                        }
-                      ]
-                    );
-                    return;
-                  }
-                }
-              } catch (error) {
-                console.error('Erreur vérification brouillon:', error);
-              }
-              
-              handleNavigateToForm();
-            }}
+      </View>
+      
+      {/* NOUVELLE BARRE DE RECHERCHE */}
+      <View style={styles.searchContainer}>
+        <FontAwesome5 
+          name="search" 
+          size={16} 
+          color="#9ca3af" 
+          style={styles.searchIcon}
+        />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Rechercher par adresse..."
+          placeholderTextColor="#9ca3af"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity 
+            onPress={() => setSearchQuery('')}
+            style={styles.clearButton}
           >
-            <FontAwesome5 name="plus" size={20} color="white" />
-            <Text style={styles.newButtonText}>Nouvelle soumission</Text>
+            <FontAwesome5 name="times-circle" size={16} color="#9ca3af" />
           </TouchableOpacity>
+        )}
+      </View>
+
+      {/* OPTIONNEL: Afficher le nombre de résultats de recherche */}
+      {searchQuery.trim() && (
+        <View style={styles.searchResults}>
+          <Text style={styles.searchResultsText}>
+            {filteredSubmissions.length} résultat{filteredSubmissions.length !== 1 ? 's' : ''} trouvé{filteredSubmissions.length !== 1 ? 's' : ''}
+          </Text>
         </View>
+      )}
 
-       
+      {/* Bouton nouvelle soumission */}
+      <View style={styles.newButtonContainer}>
+        <TouchableOpacity
+          style={styles.newButton}
+          onPress={async () => {
+            setPreviousView('dashboard');
+            try {
+              const draftString = await AsyncStorage.getItem('SOUMISSION_DRAFT');
+              if (draftString) {
+                const draft = JSON.parse(draftString);
+                const hasData = draft.formData?.nom || draft.formData?.adresse || 
+                               draft.formData?.telephone || draft.formData?.courriel || 
+                               draft.formData?.notes || draft.photos?.length > 0;
+                
+                if (hasData) {
+                  Alert.alert(
+                    'Brouillon trouvé',
+                    'Un brouillon de soumission a été trouvé. Voulez-vous le restaurer ?',
+                    [
+                      {
+                        text: 'Non, nouveau',
+                        style: 'cancel',
+                        onPress: () => {
+                          global.skipDraftLoad = true;
+                          handleNavigateToForm();
+                        }
+                      },
+                      {
+                        text: 'Oui, restaurer',
+                        style: 'default',
+                        onPress: () => {
+                          global.skipDraftLoad = false;
+                          handleNavigateToForm();
+                        }
+                      }
+                    ]
+                  );
+                  return;
+                }
+              }
+            } catch (error) {
+              console.error('Erreur vérification brouillon:', error);
+            }
+            
+            handleNavigateToForm();
+          }}
+        >
+          <FontAwesome5 name="plus" size={20} color="white" />
+          <Text style={styles.newButtonText}>Nouvelle soumission</Text>
+        </TouchableOpacity>
+      </View>
 
-        {/* Vue unique avec tous les dossiers et contenus */}
-        <View style={styles.mainContent}>
-          <View style={styles.foldersSectionHeader}>
-            <Text style={styles.foldersTitle}>DOSSIERS</Text>
-          </View>
-          
-          <ScrollView style={styles.mainScrollView} showsVerticalScrollIndicator={false}>
-            {/* Rendu de tous les dossiers et leur contenu */}
-            {getOrganizedFolders().map((folder) => (
+      {/* Vue unique avec tous les dossiers et contenus */}
+      <View style={styles.mainContent}>
+        <View style={styles.foldersSectionHeader}>
+          <Text style={styles.foldersTitle}>DOSSIERS</Text>
+        </View>
+        
+        <ScrollView style={styles.mainScrollView} showsVerticalScrollIndicator={false}>
+          {/* Rendu de tous les dossiers avec PROTECTION contre slug undefined */}
+          {getOrganizedFolders().map((folder) => {
+            // ✅ PROTECTION contre les slugs undefined
+            if (!folder || !folder.slug || folder.slug === 'undefined') {
+              console.warn('⚠️ Dossier avec slug invalide ignoré:', folder);
+              return null;
+            }
+            
+            return (
               <View key={folder.slug}>
                 {renderFolder(folder)}
                 
-                {/* Afficher les soumissions si le dossier est sélectionné ET n'est pas un dossier système */}
-                {selectedFolder === folder.slug && 
-                 folder.slug !== 'assignments' && 
-                 folder.slug !== 'pending' && 
-                 folder.slug !== 'completed' && (
-                  <View style={styles.submissionsContainer}>
-                    {/* Liste des soumissions */}
-                    {filteredSubmissions.length === 0 ? (
-                      <Text style={styles.noSubmissionsText}>Aucune soumission dans ce dossier</Text>
-                    ) : (
-                      filteredSubmissions.map(submission => (
-                        <TouchableOpacity
-                          key={submission.id}
-                          style={styles.submissionItem}
-                          onPress={() => {
-                            console.log('🎯 Clic sur soumission:', submission.id, submission.client?.adresse);
-                            handleOpenViewer(submission);
-                          }}
-                          onLongPress={() => {
-                            Alert.alert(
-                              'Options',
-                              submission.client?.adresse || submission.displayName || 'Cette soumission',
-                              [
-                                { text: 'Annuler', style: 'cancel' },
-                                { 
-                                  text: 'Modifier', 
-                                  onPress: () => {
-                                    setPreviousView('dashboard');
-                                    handleNavigateToForm(submission);
-                                  }
-                                },
-                                {
-                                  text: 'Supprimer',
-                                  style: 'destructive',
-                                  onPress: () => handleDeleteSubmission(
-                                    submission.id, 
-                                    submission.client?.adresse || submission.displayName || 'cette soumission'
-                                  )
-                                }
-                              ]
-                            );
-                          }}
-                        >
-                          <View style={styles.submissionContent}>
-                            <Text style={styles.submissionTitle}>
-                              {submission.client?.adresse || submission.displayName || submission.client?.nom || 'Sans nom'}
-                            </Text>
-                            {submission.client?.nom && submission.client?.adresse && (
-                              <Text style={styles.submissionSubtitle}>Client: {submission.client.nom}</Text>
-                            )}
-                            {submission.notes && (
-                              <Text style={styles.submissionNotes} numberOfLines={1}>
-                                {submission.notes}
-                              </Text>
-                            )}
-                            <Text style={styles.submissionDate}>
-                              {new Date(submission.createdAt || submission.timestamp).toLocaleDateString('fr-CA')}
-                            </Text>
-                          </View>
-                          
-                          <View style={styles.submissionRight}>
-                            {submission.photos && submission.photos.length > 0 && (
-                              <View style={styles.photoBadge}>
-                                <FontAwesome5 name="camera" size={10} color="#666" />
-                                <Text style={styles.photoCount}>{submission.photos.length}</Text>
-                              </View>
-                            )}
-                            <FontAwesome5 name="chevron-right" size={14} color="#6c7680" />
-                          </View>
-                        </TouchableOpacity>
-                      ))
-                    )}
-                  </View>
-                )}
-              </View>
-            ))}
-          </ScrollView>
-        </View>
-        
-        {/* Footer avec statut de connexion */}
-        <View style={styles.footer}>
-          <View style={styles.connectionStatus}>
-            <View style={[
-              styles.statusDot,
-              { backgroundColor: firebaseConnected ? '#4ade80' : '#ef4444' }
-            ]} />
-            <Text style={styles.statusText}>
-              {firebaseConnected ? 'Synchronisé' : 'Hors ligne'}
-            </Text>
-          </View>
-        </View>
-        
-        {/* Modal SubmissionViewer */}
-        {showSubmissionViewer && viewerSubmission && (
-          <Modal
-            visible={showSubmissionViewer}
-            animationType="slide"
-            onRequestClose={() => setShowSubmissionViewer(false)}
-          >
-            <SubmissionViewer
-              submission={viewerSubmission}
-              onBack={() => {
-                setShowSubmissionViewer(false);
-                setViewerSubmission(null);
-              }}
-            />
-          </Modal>
-        )}
-        
-        {/* Modals */}
-        <AssignmentModal
-          visible={showAssignmentModal}
-          onClose={() => setShowAssignmentModal(false)}
-          onSubmit={handleCreateAssignment}
-        />
-      </SafeAreaView>
-    );
-  };
-
-  // Vue Folder séparée
-  const renderFolderView = () => {
-    const currentFolder = folders[selectedFolder];
-    const filteredSubmissions = getFilteredSubmissions();
-    const canCreateNew = selectedFolder === 'assignments';
-    
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar style="light" backgroundColor="#1e2936" />
-        
-        {/* Header avec bouton retour */}
-        <View style={styles.assignmentsHeader}>
-          <TouchableOpacity 
+               {/* Afficher les soumissions si le dossier est sélectionné OU si on a une recherche active */}
+{(selectedFolder === folder.slug || (searchQuery.trim() && getFilteredSubmissions(folder.slug).length > 0)) && 
+ folder.slug !== 'assignments' && 
+ folder.slug !== 'pending' && 
+ folder.slug !== 'completed' && (
+  <View style={styles.submissionsContainer}>
+    {(() => {
+      // Obtenir les soumissions pour CE dossier spécifique
+      const folderSubmissions = searchQuery.trim() 
+        ? getFilteredSubmissions(folder.slug) 
+        : (selectedFolder === folder.slug ? filteredSubmissions : []);
+      
+      return folderSubmissions.length === 0 ? (
+        <Text style={styles.noSubmissionsText}>
+          {searchQuery.trim() ? 'Aucun résultat dans ce dossier' : 'Aucune soumission dans ce dossier'}
+        </Text>
+      ) : (
+        folderSubmissions.map(submission => (
+          <TouchableOpacity
+            key={submission.id}
+            style={styles.submissionItem}
             onPress={() => {
-              setSelectedFolder(null);
-              setCurrentView('dashboard');
+              console.log('🎯 Clic sur soumission:', submission.id, submission.client?.adresse);
+              handleOpenViewer(submission);
             }}
-            style={styles.backButton}
+            onLongPress={() => {
+              Alert.alert(
+                'Options',
+                safeText(submission.client?.adresse || submission.displayName, 'Cette soumission'),
+                [
+                  { text: 'Annuler', style: 'cancel' },
+                  { 
+                    text: 'Modifier', 
+                    onPress: () => {
+                      setPreviousView('dashboard');
+                      handleNavigateToForm(submission);
+                    }
+                  },
+                  {
+                    text: 'Supprimer',
+                    style: 'destructive',
+                    onPress: () => handleDeleteSubmission(
+                      submission.id, 
+                      safeText(submission.client?.adresse || submission.displayName, 'cette soumission')
+                    )
+                  }
+                ]
+              );
+            }}
           >
-            <FontAwesome5 name="arrow-left" size={20} color="white" />
-          </TouchableOpacity>
-          
-          <Text style={styles.assignmentsTitle}>
-            {currentFolder?.label || 'Dossier'}
-          </Text>
-          
-          <View style={{ width: 40 }} />
-        </View>
-        
-        {/* Bouton nouvel assignment */}
-        {canCreateNew && (
-          <View style={styles.newAssignmentContainer}>
-            <TouchableOpacity
-              style={styles.newAssignmentButtonFull}
-              onPress={() => setShowAssignmentModal(true)}
-            >
-              <FontAwesome5 name="plus" size={18} color="white" />
-              <Text style={styles.newAssignmentTextFull}>Nouvel assignment</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-        
-        {/* Liste des soumissions */}
-        <ScrollView style={styles.assignmentsList}>
-          {loading ? (
-            <ActivityIndicator size="large" color="#5B9BD5" style={{ marginTop: 50 }} />
-          ) : filteredSubmissions.length === 0 ? (
-            <View style={styles.emptyAssignments}>
-              <FontAwesome5 
-                name={currentFolder?.icon || 'folder-open'} 
-                size={50} 
-                color="#6c7680" 
-              />
-              <Text style={styles.emptyAssignmentsText}>
-                Aucune soumission dans {currentFolder?.label || 'ce dossier'}
+            <View style={styles.submissionContent}>
+              <Text style={styles.submissionTitle}>
+                {safeText(submission.client?.adresse || submission.displayName || submission.client?.nom, 'Sans nom')}
+              </Text>
+              {submission.client?.nom && submission.client?.adresse && (
+                <Text style={styles.submissionSubtitle}>
+                  {safeText(`Client: ${submission.client.nom}`, '')}
+                </Text>
+              )}
+              {submission.notes && (
+                <Text style={styles.submissionNotes} numberOfLines={1}>
+                  {safeText(submission.notes, '')}
+                </Text>
+              )}
+              <Text style={styles.submissionDate}>
+                {new Date(submission.createdAt || submission.timestamp).toLocaleDateString('fr-CA')}
               </Text>
             </View>
-          ) : (
-            filteredSubmissions.map(submission => {
-              const isPending = submission.status === 'captured' || submission.status === 'pending' || !submission.status;
-              const isCompleted = submission.status === 'completed';
-              
-              // Calculer la superficie
-              const getSuperficie = () => {
-                let superficie = 0;
-                if (submission.toiture?.superficie) {
-                  Object.values(submission.toiture.superficie).forEach(val => {
-                    superficie += parseFloat(val) || 0;
-                  });
-                }
-                if (submission.clientInfo?.roofInfo?.totalSuperficie) {
-                  superficie = submission.clientInfo.roofInfo.totalSuperficie;
-                }
-                return superficie || 0;
-              };
-              
-              const photoCount = submission.photos?.length || 0;
-              
-              return (
-                <View
-                  key={submission.id}
-                  style={styles.assignmentCard}
-                >
-                  {/* Wrapper pour le longPress */}
-                  <TouchableOpacity
-                    style={styles.cardTouchable}
-                    onLongPress={() => {
-                      Alert.alert(
-                        'Options',
-                        submission.client?.adresse || submission.displayName || 'Cette soumission',
-                        [
-                          { text: 'Annuler', style: 'cancel' },
-                          { 
-                            text: 'Modifier', 
-                            onPress: () => {
-                              setPreviousView('folderView');
-                              handleNavigateToForm(submission);
-                            }
-                          },
-                          {
-                            text: 'Supprimer',
-                            style: 'destructive',
-                            onPress: () => handleDeleteSubmission(
-                              submission.id, 
-                              submission.client?.adresse || submission.displayName || 'cette soumission'
-                            )
-                          }
-                        ]
-                      );
-                    }}
-                    delayLongPress={500}
-                    activeOpacity={1}
-                  >
-                    {/* En-tête avec adresse et boutons */}
-                    <View style={styles.cardHeader}>
-                      <View style={styles.addressRow}>
-                        <FontAwesome5 name="home" size={14} color="#3498db" />
-                        <Text style={styles.cardAddress} numberOfLines={1}>
-                          {submission.client?.adresse || submission.displayName || 'Adresse inconnue'}
-                        </Text>
-                      </View>
-                      
-                      {/* Boutons d'action à droite */}
-                      <View style={styles.rightActions}>
-                        <TouchableOpacity 
-                          onPress={(e) => {
-                            e.stopPropagation();
-                            openAddressInMaps(submission.client?.adresse || submission.displayName);
-                          }}
-                          style={[
-                            styles.mapsButton,
-                            { opacity: (submission.client?.adresse || submission.displayName) ? 1 : 0.5 }
-                          ]}
-                          disabled={!submission.client?.adresse && !submission.displayName}
-                        >
-                          <FontAwesome5 name="map-marker-alt" size={14} color="white" />
-                        </TouchableOpacity>
-                        
-                        <View style={[
-                          styles.statusBadgeNew, 
-                          isPending && styles.pendingBadge,
-                          isCompleted && styles.completedBadge
-                        ]}>
-                          <Text style={[
-                            styles.statusTextNew,
-                            isCompleted && { color: 'white' }
-                          ]}>
-                            {submission.status === 'assignment' ? 'Assignment' : 
-                             submission.status === 'completed' ? 'Complétée' : 'À compléter'}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-                    
-                    {/* Nom du client */}
-                    {submission.client?.nom && (
-                      <Text style={styles.cardClient}>Client: {submission.client.nom}</Text>
-                    )}
-                    
-                    {/* Superficie et photos */}
-                    <View style={styles.detailsRow}>
-                      <View style={styles.detailItem}>
-                        <FontAwesome5 name="ruler-combined" size={12} color="#666" />
-                        <Text style={styles.detailText}>Superficie: {getSuperficie().toFixed(0)} pi²</Text>
-                      </View>
-                      <View style={styles.detailItem}>
-                        <FontAwesome5 name="camera" size={12} color="#666" />
-                        <Text style={styles.detailText}>Photos: {photoCount}</Text>
-                      </View>
-                    </View>
-                    
-                    {/* Notes si présentes */}
-                    {submission.notes && (
-                      <View style={styles.notesContainer}>
-                        <Text style={styles.notesTitle}>Notes:</Text>
-                        <Text style={styles.notesText} numberOfLines={2}>{submission.notes}</Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                  
-                  {/* Boutons Voir/Mesurer et Calculer */}
-                  <View style={styles.actionButtons}>
-                    <TouchableOpacity 
-                      style={[styles.actionButton, styles.viewButton]}
-                      onPress={() => {
-                        console.log('🎯 Bouton Voir/Mesurer cliqué - Dossier:', selectedFolder);
-                        
-                        if (selectedFolder === 'assignments') {
-                          setPreviousView('folderView');
-                          handleNavigateToForm(submission);
-                        } else {
-                          console.log('✅ Ouverture du SubmissionViewer');
-                          handleOpenViewer(submission);
-                        }
-                      }}
-                    >
-                      <FontAwesome5 name="eye" size={14} color="#374151" />
-                      <Text style={styles.buttonText}>
-                        {selectedFolder === 'assignments' ? 'Mesurer' : 'Voir'}
-                      </Text>
-                    </TouchableOpacity>
-                    
-                    {isPending && selectedFolder !== 'completed' && (
-                      <TouchableOpacity 
-                        style={[styles.actionButton, styles.calculateButton]}
-                        onPress={() => {
-                          Alert.alert(
-                            'Fonction bureau', 
-                            'Le calculateur est accessible sur ordinateur seulement',
-                            [{ text: 'OK', style: 'default' }]
-                          );
-                        }}
-                      >
-                        <FontAwesome5 name="calculator" size={14} color="white" />
-                        <Text style={[styles.buttonText, styles.calculateButtonText]}>Calculer</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                  
+            
+            <View style={styles.submissionRight}>
+              {submission.photos && submission.photos.length > 0 && (
+                <View style={styles.photoBadge}>
+                  <FontAwesome5 name="camera" size={10} color="#666" />
+                  <Text style={styles.photoCount}>{safeText(submission.photos.length, '0')}</Text>
                 </View>
-              );
-            })
-          )}
+              )}
+              <FontAwesome5 name="chevron-right" size={14} color="#6c7680" />
+            </View>
+          </TouchableOpacity>
+        ))
+      );
+    })()}
+  </View>
+)}
+              </View>
+            );
+          })}
         </ScrollView>
-        
-        {/* Modal Submission Viewer */}
-        {showSubmissionViewer && viewerSubmission && (
-          <Modal
-            visible={showSubmissionViewer}
-            animationType="slide"
-            onRequestClose={() => setShowSubmissionViewer(false)}
-          >
-            <SubmissionViewer
-              submission={viewerSubmission}
-              onBack={() => {
-                setShowSubmissionViewer(false);
-                setViewerSubmission(null);
-              }}
-            />
-          </Modal>
-        )}
-        
-        {/* Modal Assignment */}
-        {canCreateNew && (
-          <AssignmentModal
-            visible={showAssignmentModal}
-            onClose={() => setShowAssignmentModal(false)}
-            onSubmit={handleCreateAssignment}
+      </View>
+      
+      {/* Footer avec statut de connexion */}
+      <View style={styles.footer}>
+        <View style={styles.connectionStatus}>
+          <View style={[
+            styles.statusDot,
+            { backgroundColor: firebaseConnected ? '#4ade80' : '#ef4444' }
+          ]} />
+          <Text style={styles.statusText}>
+            {safeText(firebaseConnected ? 'Synchronisé' : 'Hors ligne', 'Statut inconnu')}
+          </Text>
+        </View>
+      </View>
+      
+      {/* Modal SubmissionViewer */}
+      {showSubmissionViewer && viewerSubmission && (
+        <Modal
+          visible={showSubmissionViewer}
+          animationType="slide"
+          onRequestClose={() => setShowSubmissionViewer(false)}
+        >
+          <SubmissionViewer
+            submission={viewerSubmission}
+            onBack={() => {
+              setShowSubmissionViewer(false);
+              setViewerSubmission(null);
+            }}
           />
-        )}
-      </SafeAreaView>
-    );
+        </Modal>
+      )}
+      
+      {/* Modals */}
+      <AssignmentModal
+        visible={showAssignmentModal}
+        onClose={() => setShowAssignmentModal(false)}
+        onSubmit={handleCreateAssignment}
+      />
+    </SafeAreaView>
+  );
+};
+
+  // Vue Folder séparée
+// Vue Folder séparée - CORRIGÉE
+// Modifiez votre renderFolderView avec ces changements
+
+const renderFolderView = () => {
+  const currentFolder = folders[selectedFolder];
+  const filteredSubmissions = getFilteredSubmissions();
+  const canCreateNew = selectedFolder === 'assignments';
+  const isAssignmentsView = selectedFolder === 'assignments'; // Pour identifier la vue assignments
+ const isPendingView = selectedFolder === 'pending';  // ← NOUVELLE LIGNE
+  
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#f8fafc' }}>
+      <StatusBar style="dark" backgroundColor="#f8fafc" />
+      {/* Header avec bouton retour */}
+      <View style={styles.assignmentsHeader}>
+        <TouchableOpacity 
+          onPress={() => {
+            setSelectedFolder(null);
+            setCurrentView('dashboard');
+          }}
+          style={styles.backButton}
+        >
+          <FontAwesome5 name="arrow-left" size={20} color="#0ea5e9" />
+        </TouchableOpacity>
+        
+        <Text style={styles.assignmentsTitle}>
+          {currentFolder?.label || 'Dossier'}
+        </Text>
+        
+        <View style={{ width: 40 }} />
+      </View>
+      
+      {/* Bouton nouvel assignment */}
+      {canCreateNew && (
+        <View style={styles.newAssignmentContainer}>
+          <TouchableOpacity
+            style={styles.newAssignmentButtonFull}
+            onPress={() => setShowAssignmentModal(true)}
+          >
+            <FontAwesome5 name="plus" size={18} color="white" />
+            <Text style={styles.newAssignmentTextFull}>Nouvel assignment</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      
+      {/* Liste des soumissions */}
+      <ScrollView style={styles.assignmentsList}>
+        {loading ? (
+          <ActivityIndicator size="large" color="#5B9BD5" style={{ marginTop: 50 }} />
+        ) : filteredSubmissions.length === 0 ? (
+          <View style={styles.emptyAssignments}>
+            <FontAwesome5 
+              name={currentFolder?.icon || 'folder-open'} 
+              size={50} 
+              color="#6c7680" 
+            />
+            <Text style={styles.emptyAssignmentsText}>
+              Aucune soumission dans {currentFolder?.label || 'ce dossier'}
+            </Text>
+          </View>
+        ) : (
+        filteredSubmissions.map(submission => {
+  const isPending = submission.status === 'captured' || submission.status === 'pending' || !submission.status;
+  const isCompleted = submission.status === 'completed';
+  const isAssignmentsView = selectedFolder === 'assignments';
+ 
+  
+  // Formater la date de création
+  const formatDate = (timestamp) => {
+    const date = new Date(timestamp);
+    const options = { 
+      day: 'numeric', 
+      month: 'short', 
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    };
+    return date.toLocaleDateString('fr-CA', options);
   };
+  
+  // Fonction pour appeler le numéro
+const handlePhoneActions = (phoneNumber) => {
+  if (!phoneNumber) {
+    Alert.alert('Téléphone', 'Aucun numéro de téléphone disponible');
+    return;
+  }
+  
+  // Nettoyer le numéro (enlever les tirets, espaces, etc.)
+  const cleanedNumber = phoneNumber.replace(/\D/g, '');
+  
+  Alert.alert(
+    'Contact',
+    phoneNumber,
+    [
+      {
+        text: 'Appeler',
+        onPress: () => {
+          const phoneUrl = `tel:${cleanedNumber}`;
+          Linking.openURL(phoneUrl).catch(err => {
+            console.error('Erreur appel:', err);
+            Alert.alert('Erreur', 'Impossible d\'appeler ce numéro');
+          });
+        }
+      },
+      {
+        text: 'Message texte',
+        onPress: () => {
+          const smsUrl = `sms:${cleanedNumber}`;
+          Linking.openURL(smsUrl).catch(err => {
+            console.error('Erreur SMS:', err);
+            Alert.alert('Erreur', 'Impossible d\'envoyer un SMS à ce numéro');
+          });
+        }
+      },
+      {
+        text: 'Annuler',
+        style: 'cancel'
+      }
+    ]
+  );
+};
+  
+  return (
+    <TouchableOpacity
+      key={submission.id}
+      style={styles.assignmentCard}
+      onPress={() => {
+        if (isAssignmentsView) {
+          setSelectedSubmission(submission);
+          setShowAssignmentModal(true);
+        } else {
+          handleOpenViewer(submission);
+        }
+      }}
+      activeOpacity={0.7}
+    >
+      <View style={styles.cardTouchable}>
+        {/* En-tête avec adresse et boutons */}
+        <View style={styles.cardHeader}>
+          <View style={styles.addressRow}>
+            <FontAwesome5 name="home" size={14} color="#3498db" />
+            <Text style={styles.cardAddress} numberOfLines={1}>
+              {submission.client?.adresse || submission.displayName || 'Adresse inconnue'}
+            </Text>
+          </View>
+          
+          {/* Boutons d'action à droite */}
+          <View style={styles.rightActions}>
+            <TouchableOpacity 
+onPress={(e) => {
+  e.stopPropagation();
+  openAddressInMaps(submission.client?.adresse || submission.displayName);  // ✅ CORRECT
+}}
+              style={[
+                styles.mapsButton,
+                { opacity: (submission.client?.adresse || submission.displayName) ? 1 : 0.5 }
+              ]}
+              disabled={!submission.client?.adresse && !submission.displayName}
+            >
+              <FontAwesome5 name="map-marker-alt" size={14} color="white" />
+            </TouchableOpacity>
+            
+            {/* Afficher le badge de statut SEULEMENT si on n'est PAS dans assignments */}
+            {!isAssignmentsView && !isPendingView && (
+              <View style={[
+                styles.statusBadgeNew, 
+                isPending && styles.pendingBadge,
+                isCompleted && styles.completedBadge
+              ]}>
+                <Text style={[
+                  styles.statusTextNew,
+                  isCompleted && { color: 'white' }
+                ]}>
+                  {submission.status === 'assignment' ? 'Assignment' : 
+                   submission.status === 'completed' ? 'Complétée' : 'À compléter'}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+        
+        {/* SECTION MODIFIÉE : Affichage différent selon la vue */}
+        {(isAssignmentsView || isPendingView) ? (
+          <>
+            {/* Nom du client */}
+            {submission.client?.nom && (
+              <View style={styles.clientInfoRow}>
+                
+                <Text style={styles.cardClient}>{submission.client.nom}</Text>
+              </View>
+            )}
+            
+            {/* Téléphone cliquable */}
+            {submission.client?.telephone && (
+              <TouchableOpacity 
+                style={styles.phoneRow}
+              onPress={(e) => {
+  e.stopPropagation();
+  handlePhoneActions(submission.client.telephone);  // ✅ CORRECT
+}}
+              >
+                <FontAwesome5 name="phone" size={12} color="#0ea5e9" />
+                <Text style={styles.phoneText}>{submission.client.telephone}</Text>
+              </TouchableOpacity>
+            )}
+            
+            {/* Date de création */}
+            <View style={styles.dateRow}>
+              <FontAwesome5 name="calendar" size={12} color="#666" />
+              <Text style={styles.dateText}>
+                Créé le {formatDate(submission.createdAt || submission.timestamp)}
+              </Text>
+            </View>
+          </>
+        ) : (
+          <>
+            {/* Vue normale (non-assignments) : garder l'affichage actuel */}
+            {submission.client?.nom && (
+              <Text style={styles.cardClient}>Client: {submission.client.nom}</Text>
+            )}
+            
+            <View style={styles.detailsRow}>
+              <View style={styles.detailItem}>
+                <FontAwesome5 name="ruler-combined" size={12} color="#666" />
+                <Text style={styles.detailText}>
+                  Superficie: {(() => {
+                    let superficie = 0;
+                    if (submission.toiture?.superficie) {
+                      Object.values(submission.toiture.superficie).forEach(val => {
+                        superficie += parseFloat(val) || 0;
+                      });
+                    }
+                    if (submission.clientInfo?.roofInfo?.totalSuperficie) {
+                      superficie = submission.clientInfo.roofInfo.totalSuperficie;
+                    }
+                    return superficie.toFixed(0);
+                  })()} pi²
+                </Text>
+              </View>
+              <View style={styles.detailItem}>
+                <FontAwesome5 name="camera" size={12} color="#666" />
+                <Text style={styles.detailText}>Photos: {submission.photos?.length || 0}</Text>
+              </View>
+            </View>
+          </>
+        )}
+        
+        {/* Notes si présentes */}
+        {submission.notes && (
+          <View style={styles.notesContainer}>
+            <Text style={styles.notesTitle}>Notes:</Text>
+            <Text style={styles.notesText} numberOfLines={2}>{submission.notes}</Text>
+          </View>
+        )}
+      </View>
+      
+      {/* Boutons Voir/Mesurer et Calculer */}
+      <View style={styles.actionButtons}>
+        <TouchableOpacity 
+          style={[styles.actionButton, styles.viewButton]}
+          onPress={(e) => {
+            e.stopPropagation();
+            console.log('🎯 Bouton Voir/Mesurer cliqué - Dossier:', selectedFolder);
+            
+            if (selectedFolder === 'assignments') {
+              setPreviousView('folderView');
+              handleNavigateToForm(submission);
+            } else {
+              console.log('✅ Ouverture du SubmissionViewer');
+              handleOpenViewer(submission);
+            }
+          }}
+        >
+          <FontAwesome5 name="eye" size={14} color="#374151" />
+          <Text style={styles.buttonText}>
+            {selectedFolder === 'assignments' ? 'Mesurer' : 'Voir'}
+          </Text>
+        </TouchableOpacity>
+        
+        {/* Afficher le bouton Calculer SEULEMENT si on n'est PAS dans assignments */}
+        {!isAssignmentsView && isPending && selectedFolder !== 'completed' && (
+          <TouchableOpacity 
+            style={[styles.actionButton, styles.calculateButton]}
+            onPress={(e) => {
+              e.stopPropagation();
+              Alert.alert(
+                'Fonction bureau', 
+                'Le calculateur est accessible sur ordinateur seulement',
+                [{ text: 'OK', style: 'default' }]
+              );
+            }}
+          >
+            <FontAwesome5 name="calculator" size={14} color="white" />
+            <Text style={[styles.buttonText, styles.calculateButtonText]}>Calculer</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      
+    </TouchableOpacity>
+  );
+})
+        )}
+      </ScrollView>
+      
+      {/* Modal Submission Viewer */}
+      {showSubmissionViewer && viewerSubmission && (
+        <Modal
+          visible={showSubmissionViewer}
+          animationType="slide"
+          onRequestClose={() => setShowSubmissionViewer(false)}
+        >
+          <SubmissionViewer
+            submission={viewerSubmission}
+            onBack={() => {
+              setShowSubmissionViewer(false);
+              setViewerSubmission(null);
+            }}
+          />
+        </Modal>
+      )}
+      
+      {/* Modal Assignment - Modifiée pour gérer l'édition */}
+      {canCreateNew && (
+        <AssignmentModal
+          visible={showAssignmentModal}
+          onClose={() => {
+            setShowAssignmentModal(false);
+            setSelectedSubmission(null);
+          }}
+          onSubmit={handleCreateAssignment}
+          initialData={selectedSubmission} // Passer les données existantes
+          isEditMode={!!selectedSubmission} // Indiquer si on est en mode édition
+        />
+      )}
+      
+    </SafeAreaView>
+  );
+};
 
   // Vue formulaire
   if (currentView === 'form') {
@@ -1010,19 +1320,29 @@ console.log('   📋 FolderIds disponibles:', folderIds);
 }
 
 
+// 🎨 VOS STYLES TRANSFORMÉS EN THÈME CLAIR
+// Remplacez votre const styles actuel par celui-ci :
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1e2936',
+    backgroundColor: '#f8fafc',        // ✅ CHANGÉ: était '#1e2936'
   },
   mainHeader: {
-    backgroundColor: '#2c3e50',
+    backgroundColor: '#f8fafc',        
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: Platform.OS === 'ios' ? 50 : 35,
+    paddingTop: Platform.OS === 'ios' ? 15 : 25,
     paddingBottom: 16,
     paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 3,
   },
   appInfo: {
     flexDirection: 'row',
@@ -1031,19 +1351,19 @@ const styles = StyleSheet.create({
   appIcon: {
     width: 40,
     height: 40,
-    backgroundColor: '#5B9BD5',
+    backgroundColor: '#0ea5e9',        // ✅ CHANGÉ: était '#5B9BD5' (bleu plus moderne)
     borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
   },
   appTitle: {
-    color: 'white',
+    color: '#1e293b',                  // ✅ CHANGÉ: était 'white'
     fontSize: 18,
     fontWeight: '600',
   },
   appVersion: {
-    color: '#8e9297',
+    color: '#64748b',                  // ✅ CHANGÉ: était '#8e9297'
     fontSize: 12,
     marginTop: 2,
   },
@@ -1052,15 +1372,21 @@ const styles = StyleSheet.create({
   },
   newButtonContainer: {
     padding: 16,
-    backgroundColor: '#2c3e50',
+    backgroundColor: '#f8fafc',        // ✅ CHANGÉ: était '#2c3e50'
   },
   newButton: {
-    backgroundColor: '#5B9BD5',
+    backgroundColor: '#0ea5e9',        // ✅ CHANGÉ: était '#5B9BD5'
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,
-    borderRadius: 10,
+    borderRadius: 12,                  // ✅ CHANGÉ: était 10 (plus arrondi)
+    // ✅ AJOUTÉ: Ombre moderne
+    shadowColor: '#0ea5e9',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
   },
   newButtonText: {
     color: 'white',
@@ -1069,10 +1395,9 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   
-  
   mainContent: {
     flex: 1,
-    backgroundColor: '#2c3e50',
+    backgroundColor: '#f8fafc',        // ✅ CHANGÉ: était '#2c3e50'
   },
   mainScrollView: {
     flex: 1,
@@ -1086,7 +1411,7 @@ const styles = StyleSheet.create({
     paddingBottom: 15,
   },
   foldersTitle: {
-    color: '#8e9297',
+    color: '#64748b',                  // ✅ CHANGÉ: était '#8e9297'
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 1.2,
@@ -1100,9 +1425,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 14,
     paddingHorizontal: 20,
+    // ✅ AJOUTÉ: Bordure subtile entre les items
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#f1f5f9',
   },
   folderItemSelected: {
-    backgroundColor: 'rgba(91, 155, 213, 0.15)',
+    backgroundColor: '#e0f2fe',        // ✅ CHANGÉ: était 'rgba(91, 155, 213, 0.15)'
+    borderRadius: 8,                   // ✅ AJOUTÉ: Coins arrondis pour selection
+    marginHorizontal: 8,
+    paddingHorizontal: 12,
   },
   folderContent: {
     flexDirection: 'row',
@@ -1117,19 +1448,20 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   folderLabel: {
-    color: '#ffffff',
+    color: '#1e293b',                  // ✅ CHANGÉ: était '#ffffff'
     fontSize: 16,
     flex: 1,
   },
   folderLabelSelected: {
-    fontWeight: '500',
+    fontWeight: '600',                 // ✅ CHANGÉ: était '500' (plus visible)
+    color: '#0ea5e9',                  // ✅ AJOUTÉ: Couleur accent quand sélectionné
   },
   folderActions: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   folderBadge: {
-    backgroundColor: '#5a6772',
+    backgroundColor: '#e2e8f0',        // ✅ CHANGÉ: était '#5a6772'
     borderRadius: 14,
     paddingHorizontal: 9,
     paddingVertical: 3,
@@ -1138,7 +1470,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   folderBadgeText: {
-    color: '#ffffff',
+    color: '#475569',                  // ✅ CHANGÉ: était '#ffffff'
     fontSize: 13,
     fontWeight: '600',
   },
@@ -1146,9 +1478,17 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   submissionsContainer: {
-    backgroundColor: '#34495e',
+    backgroundColor: '#ffffff',        // ✅ CHANGÉ: était '#34495e'
     marginTop: 5,
     marginBottom: 10,
+    marginHorizontal: 8,               // ✅ AJOUTÉ: Marges latérales
+    borderRadius: 12,                  // ✅ AJOUTÉ: Coins arrondis
+    // ✅ AJOUTÉ: Ombre subtile
+    shadowColor: '#64748b',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
   },
   folderHeaderBar: {
     flexDirection: 'row',
@@ -1156,29 +1496,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 12,
-    backgroundColor: '#2c3e50',
+    backgroundColor: '#0ea5e9',        // ✅ CHANGÉ: était '#2c3e50'
+    borderTopLeftRadius: 12,           // ✅ AJOUTÉ: Coins arrondis en haut
+    borderTopRightRadius: 12,
   },
   folderHeaderTitle: {
     color: 'white',
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: '600',                 // ✅ CHANGÉ: était '500'
   },
   newAssignmentButton: {
-    backgroundColor: '#5B9BD5',
+    backgroundColor: '#ffffff',        // ✅ CHANGÉ: était '#5B9BD5'
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: 8,
+    // ✅ AJOUTÉ: Bordure colorée
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
   },
   newAssignmentText: {
-    color: 'white',
+    color: '#0ea5e9',                  // ✅ CHANGÉ: était 'white'
     fontSize: 13,
-    fontWeight: '500',
+    fontWeight: '600',                 // ✅ CHANGÉ: était '500'
     marginLeft: 5,
   },
   noSubmissionsText: {
-    color: '#8e9297',
+    color: '#64748b',                  // ✅ CHANGÉ: était '#8e9297'
     textAlign: 'center',
     padding: 20,
     fontSize: 14,
@@ -1189,32 +1534,32 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 14,
     paddingHorizontal: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#2c3e50',
+    borderBottomWidth: 0.5,            // ✅ CHANGÉ: était 1
+    borderBottomColor: '#f1f5f9',      // ✅ CHANGÉ: était '#2c3e50'
   },
   submissionContent: {
     flex: 1,
     marginRight: 10,
   },
   submissionTitle: {
-    color: '#ffffff',
+    color: '#1e293b',                  // ✅ CHANGÉ: était '#ffffff'
     fontSize: 15,
-    fontWeight: '500',
+    fontWeight: '600',                 // ✅ CHANGÉ: était '500'
     marginBottom: 2,
   },
   submissionSubtitle: {
-    color: '#8e9297',
+    color: '#64748b',                  // ✅ CHANGÉ: était '#8e9297'
     fontSize: 13,
     marginBottom: 2,
   },
   submissionNotes: {
-    color: '#6c7680',
+    color: '#94a3b8',                  // ✅ CHANGÉ: était '#6c7680'
     fontSize: 12,
     fontStyle: 'italic',
     marginBottom: 3,
   },
   submissionDate: {
-    color: '#6c7680',
+    color: '#94a3b8',                  // ✅ CHANGÉ: était '#6c7680'
     fontSize: 11,
     marginTop: 2,
   },
@@ -1225,14 +1570,14 @@ const styles = StyleSheet.create({
   photoBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: '#e0f2fe',        // ✅ CHANGÉ: était 'rgba(255, 255, 255, 0.1)'
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 10,
     marginRight: 8,
   },
   photoCount: {
-    color: '#fff',
+    color: '#0ea5e9',                  // ✅ CHANGÉ: était '#fff'
     fontSize: 11,
     marginLeft: 4,
     fontWeight: '600',
@@ -1244,22 +1589,22 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   statusAssignment: {
-    backgroundColor: 'rgba(91, 155, 213, 0.3)',
+    backgroundColor: '#dbeafe',        // ✅ CHANGÉ: était 'rgba(91, 155, 213, 0.3)'
   },
   statusPending: {
-    backgroundColor: 'rgba(255, 165, 0, 0.3)',
+    backgroundColor: '#fef3c7',        // ✅ CHANGÉ: était 'rgba(255, 165, 0, 0.3)'
   },
   statusText: {
     fontSize: 11,
     fontWeight: '600',
-    color: 'white',
+    color: '#374151',                  // ✅ CHANGÉ: était 'white'
   },
   footer: {
-    backgroundColor: '#1e2936',
+    backgroundColor: '#ffffff',        // ✅ CHANGÉ: était '#1e2936'
     paddingVertical: 18,
     alignItems: 'center',
     borderTopWidth: 1,
-    borderTopColor: '#2c3e50',
+    borderTopColor: '#e2e8f0',        // ✅ CHANGÉ: était '#2c3e50'
   },
   connectionStatus: {
     flexDirection: 'row',
@@ -1272,7 +1617,7 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   
-  // Context menu
+  // Context menu - GARDÉ IDENTIQUE car déjà clair
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -1281,13 +1626,13 @@ const styles = StyleSheet.create({
   },
   contextMenu: {
     backgroundColor: 'white',
-    borderRadius: 8,
+    borderRadius: 12,                  // ✅ CHANGÉ: était 8 (plus arrondi)
     paddingVertical: 8,
     minWidth: 200,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },  // ✅ CHANGÉ: était 2
+    shadowOpacity: 0.15,               // ✅ CHANGÉ: était 0.25
+    shadowRadius: 12,                  // ✅ CHANGÉ: était 10
     elevation: 10,
   },
   contextMenuItem: {
@@ -1298,46 +1643,59 @@ const styles = StyleSheet.create({
   },
   contextMenuItemDanger: {
     borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+    borderTopColor: '#f1f5f9',        // ✅ CHANGÉ: était '#f0f0f0'
   },
   contextMenuText: {
     fontSize: 16,
-    color: '#333',
+    color: '#1e293b',                  // ✅ CHANGÉ: était '#333'
     marginLeft: 12,
   },
   contextMenuTextDanger: {
-    color: '#e74c3c',
+    color: '#dc2626',                  // ✅ CHANGÉ: était '#e74c3c'
   },
   
   // Styles pour la vue Assignments
-  assignmentsHeader: {
-    backgroundColor: '#2c3e50',
+   assignmentsHeader: {
+    backgroundColor: '#ffffff',        
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: Platform.OS === 'ios' ? 50 : 35,
+    paddingTop: Platform.OS === 'ios' ? 15 : 25,
     paddingBottom: 16,
     paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 3,
   },
   backButton: {
     padding: 8,
   },
   assignmentsTitle: {
-    color: 'white',
+    color: '#1e293b',                  // ✅ CHANGÉ: était 'white'
     fontSize: 20,
-    fontWeight: '600',
+    fontWeight: '700',                 // ✅ CHANGÉ: était '600'
   },
   newAssignmentContainer: {
     padding: 16,
-    backgroundColor: '#2c3e50',
+    backgroundColor: '#f8fafc',        // ✅ CHANGÉ: était '#2c3e50'
   },
   newAssignmentButtonFull: {
-    backgroundColor: '#5B9BD5',
+    backgroundColor: '#0ea5e9',        // ✅ CHANGÉ: était '#5B9BD5'
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,
-    borderRadius: 10,
+    borderRadius: 12,                  // ✅ CHANGÉ: était 10
+    // ✅ AJOUTÉ: Ombre moderne
+    shadowColor: '#0ea5e9',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
   },
   newAssignmentTextFull: {
     color: 'white',
@@ -1347,7 +1705,7 @@ const styles = StyleSheet.create({
   },
   assignmentsList: {
     flex: 1,
-    backgroundColor: '#34495e',
+    backgroundColor: '#f8fafc',        // ✅ CHANGÉ: était '#34495e'
   },
   emptyAssignments: {
     alignItems: 'center',
@@ -1355,15 +1713,23 @@ const styles = StyleSheet.create({
   },
   emptyAssignmentsText: {
     fontSize: 16,
-    color: '#6c7680',
+    color: '#64748b',                  // ✅ CHANGÉ: était '#6c7680'
     marginTop: 20,
   },
   assignmentCard: {
-    backgroundColor: '#2c3e50',
+    backgroundColor: '#ffffff',        // ✅ CHANGÉ: était '#2c3e50'
     marginHorizontal: 16,
     marginTop: 16,
-    borderRadius: 10,
-    padding: 16,
+    borderRadius: 16,                  // ✅ CHANGÉ: était 10 (plus arrondi)
+    padding: 20,                       // ✅ CHANGÉ: était 16 (plus d'espace)
+    // ✅ AJOUTÉ: Ombre moderne
+    shadowColor: '#64748b',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
   },
   cardTouchable: {
     flex: 1,
@@ -1382,50 +1748,50 @@ const styles = StyleSheet.create({
   },
   cardAddress: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#ffffff',
+    fontWeight: '700',                 // ✅ CHANGÉ: était 'bold'
+    color: '#1e293b',                  // ✅ CHANGÉ: était '#ffffff'
     marginLeft: 8,
     flex: 1,
   },
   rightActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
   },
   mapsButton: {
-    backgroundColor: '#27ae60',
+    backgroundColor: '#10b981',        // ✅ CHANGÉ: était '#27ae60' (vert plus moderne)
     borderRadius: 20,
     width: 36,
     height: 36,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
+    marginRight: 8,
+    shadowColor: '#10b981',            // ✅ CHANGÉ: Ombre colorée
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
   },
-  cardClient: {
-    fontSize: 14,
-    color: '#8e9297',
-    marginBottom: 4,
-    fontStyle: 'italic',
-  },
+cardClient: {
+  fontSize: 14,
+  color: '#1e293b',  // Changé de #64748b pour être plus visible
+  marginBottom: 4,
+  fontWeight: '500',  // Ajouté pour plus de lisibilité
+},
   statusBadgeNew: {
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 4,
+    borderRadius: 6,                   // ✅ CHANGÉ: était 4 (plus arrondi)
   },
   pendingBadge: {
-    backgroundColor: '#FEF3C7',
+    backgroundColor: '#fef3c7',        // GARDÉ IDENTIQUE (déjà clair)
   },
   completedBadge: {
-    backgroundColor: '#10B981',
+    backgroundColor: '#d1fae5',        // ✅ CHANGÉ: était '#10B981' (version plus claire)
   },
   statusTextNew: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#374151',
+    color: '#374151',                  // GARDÉ IDENTIQUE (déjà bien)
   },
   detailsRow: {
     flexDirection: 'row',
@@ -1439,27 +1805,27 @@ const styles = StyleSheet.create({
   },
   detailText: {
     fontSize: 13,
-    color: '#b0b3b8',
+    color: '#64748b',                  // ✅ CHANGÉ: était '#b0b3b8'
     marginLeft: 6,
   },
   notesContainer: {
     marginTop: 8,
     marginBottom: 12,
-    backgroundColor: '#1e3a5f',
+    backgroundColor: '#f1f5f9',        // ✅ CHANGÉ: était '#1e3a5f'
     borderWidth: 1,
-    borderColor: '#2a5a8f',
-    borderRadius: 6,
-    padding: 10,
+    borderColor: '#e2e8f0',            // ✅ CHANGÉ: était '#2a5a8f'
+    borderRadius: 8,                   // ✅ CHANGÉ: était 6
+    padding: 12,                       // ✅ CHANGÉ: était 10
   },
   notesTitle: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#5B9BD5',
+    color: '#0ea5e9',                  // ✅ CHANGÉ: était '#5B9BD5'
     marginBottom: 4,
   },
   notesText: {
     fontSize: 12,
-    color: '#b0b3b8',
+    color: '#64748b',                  // ✅ CHANGÉ: était '#b0b3b8'
     lineHeight: 16,
   },
   actionButtons: {
@@ -1471,27 +1837,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
-    borderRadius: 6,
-    borderWidth: 1,
+    paddingVertical: 12,               // ✅ CHANGÉ: était 10
+    borderRadius: 8,                   // ✅ CHANGÉ: était 6
+    borderWidth: 1.5,                  // ✅ CHANGÉ: était 1
     marginHorizontal: 5,
   },
   viewButton: {
-    backgroundColor: '#34495e',
-    borderColor: '#4a5568',
+    backgroundColor: '#f1f5f9',        // ✅ CHANGÉ: était '#34495e'
+    borderColor: '#e2e8f0',            // ✅ CHANGÉ: était '#4a5568'
   },
   calculateButton: {
-    backgroundColor: '#10B981',
-    borderColor: '#10B981',
+    backgroundColor: '#10b981',        // GARDÉ IDENTIQUE (déjà bien)
+    borderColor: '#10b981',
   },
   buttonText: {
     fontSize: 13,
-    fontWeight: '500',
-    color: '#ffffff',
+    fontWeight: '600',                 // ✅ CHANGÉ: était '500'
+    color: '#64748b',                  // ✅ CHANGÉ: était '#ffffff'
     marginLeft: 6,
   },
   calculateButtonText: {
-    color: 'white',
+    color: 'white',                    // GARDÉ pour le bouton vert
   },
   
   // Styles existants
@@ -1505,18 +1871,18 @@ const styles = StyleSheet.create({
     marginRight: 10,
   },
   assignmentTitle: {
-    color: '#ffffff',
+    color: '#1e293b',                  // ✅ CHANGÉ: était '#ffffff'
     fontSize: 16,
     fontWeight: '600',
     marginBottom: 4,
   },
   assignmentAddress: {
-    color: '#8e9297',
+    color: '#64748b',                  // ✅ CHANGÉ: était '#8e9297'
     fontSize: 14,
     marginBottom: 3,
   },
   assignmentNotes: {
-    color: '#6c7680',
+    color: '#94a3b8',                  // ✅ CHANGÉ: était '#6c7680'
     fontSize: 12,
     fontStyle: 'italic',
   },
@@ -1527,13 +1893,77 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   assignmentDate: {
-    color: '#6c7680',
+    color: '#94a3b8',                  // ✅ CHANGÉ: était '#6c7680'
     fontSize: 12,
   },
   assignmentSubtitle: {
-    color: '#8e9297',
+    color: '#64748b',                  // ✅ CHANGÉ: était '#8e9297'
     fontSize: 13,
     marginTop: 2,
     fontStyle: 'italic',
   },
+  // Styles pour l'affichage spécifique des assignments
+clientInfoRow: {
+  marginTop: 8,
+  marginBottom: 4,
+},
+phoneRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  marginVertical: 6,
+  paddingVertical: 4,
+},
+phoneText: {
+  fontSize: 14,
+  color: '#0ea5e9',
+  marginLeft: 8,
+  textDecorationLine: 'underline',
+  fontWeight: '500',
+},
+dateRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  marginTop: 4,
+},
+dateText: {
+  fontSize: 12,
+  color: '#64748b',
+  marginLeft: 8,
+},
+searchContainer: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  backgroundColor: '#f3f4f6',
+  marginHorizontal: 16,
+  marginBottom: 12,
+  marginTop: -8, // Pour rapprocher du header
+  paddingHorizontal: 16,
+  paddingVertical: 10,
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: '#e5e7eb',
+},
+searchIcon: {
+  marginRight: 10,
+},
+searchInput: {
+  flex: 1,
+  fontSize: 16,
+  color: '#1f2937',
+  padding: 0,
+},
+clearButton: {
+  padding: 4,
+},
+searchResults: {
+  paddingHorizontal: 16,
+  paddingBottom: 8,
+  marginTop: -8,
+},
+searchResultsText: {
+  fontSize: 14,
+  color: '#6b7280',
+  fontStyle: 'italic',
+},
+
 });

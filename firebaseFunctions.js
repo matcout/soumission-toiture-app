@@ -298,13 +298,13 @@ export const saveSubmissionToFirebase = async (submissionData) => {
     // Générer un ID vraiment unique
     const customId = generateUniqueId(addressClean);
     
-    const dataToSave = {
-      ...submissionData,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      platform: 'mobile',
-      status: submissionData.status || 'captured'
-    };
+ const dataToSave = {
+  ...submissionData,
+  createdAt: serverTimestamp(),
+  updatedAt: serverTimestamp(),
+  platform: 'mobile',
+  folderId: submissionData.folderId || 'pending'  // ← REMPLACER
+};
 
     const docRef = doc(db, 'soumissions', customId);
     await setDoc(docRef, dataToSave);
@@ -339,14 +339,14 @@ export const createAssignment = async (assignmentData) => {
     // Utiliser la nouvelle fonction pour ID unique
     const customId = generateUniqueId(`assignment_${addressClean}`);
     
-    const dataToSave = {
-      ...assignmentData,
-      status: 'assignment',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      platform: 'mobile',
-      displayName: assignmentData.client?.adresse
-    };
+   const dataToSave = {
+  ...assignmentData,
+  folderId: 'assignments',  // ← REMPLACER
+  createdAt: serverTimestamp(),
+  updatedAt: serverTimestamp(),
+  platform: 'mobile',
+  displayName: assignmentData.client?.adresse
+};
 
     const docRef = doc(db, 'soumissions', customId);
     await setDoc(docRef, dataToSave);
@@ -378,9 +378,9 @@ export const updateSubmissionStatus = async (submissionId, newStatus, additional
       ...additionalData
     };
     
-    if (newStatus) {
-      updateData.status = newStatus;
-    }
+ if (newStatus) {
+  updateData.folderId = newStatus;  // ← UTILISER folderId
+}
 
     const submissionRef = doc(db, 'soumissions', submissionId);
     await updateDoc(submissionRef, updateData);
@@ -457,9 +457,9 @@ export const getSubmissionStats = async () => {
       const data = doc.data();
       total++;
       
-      if (data.status === 'captured') pending++;
-      if (data.status === 'completed') completed++;
-      
+   if (data.folderId === 'pending') pending++;
+if (data.folderId?.includes('projet')) completed++;
+
       totalSuperficie += data.toiture?.superficie?.totale || 0;
       totalPhotos += data.photoCount || 0;
     });

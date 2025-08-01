@@ -1,6 +1,6 @@
-// Remplacez votre AssignmentModal.js par cette version corrigée :
+// AssignmentModal.js - Version mobile avec support d'édition
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -12,11 +12,11 @@ import {
   Alert,
   Platform,
   SafeAreaView,
-  KeyboardAvoidingView,  // AJOUT IMPORTANT
+  KeyboardAvoidingView,
 } from 'react-native';
 import { FontAwesome5 } from '@expo/vector-icons';
 
-const AssignmentModal = ({ visible, onClose, onSubmit }) => {
+const AssignmentModal = ({ visible, onClose, onSubmit, initialData = null, isEditMode = false }) => {
   const [formData, setFormData] = useState({
     nom: '',
     adresse: '',
@@ -25,31 +25,65 @@ const AssignmentModal = ({ visible, onClose, onSubmit }) => {
     notes: ''
   });
 
+  // Charger les données initiales si on est en mode édition
+  useEffect(() => {
+    if (visible && initialData && isEditMode) {
+      setFormData({
+        nom: initialData.client?.nom || '',
+        adresse: initialData.client?.adresse || initialData.displayName || '',
+        telephone: initialData.client?.telephone || '',
+        courriel: initialData.client?.courriel || '',
+        notes: initialData.notes || ''
+      });
+    } else if (visible && !isEditMode) {
+      // Réinitialiser pour un nouvel assignment
+      setFormData({
+        nom: '',
+        adresse: '',
+        telephone: '',
+        courriel: '',
+        notes: ''
+      });
+    }
+  }, [visible, initialData, isEditMode]);
+
   const handleSubmit = () => {
     if (!formData.adresse.trim()) {
-      Alert.alert('⚠️ Adresse requise', 'Veuillez entrer une adresse pour créer l\'assignment');
+      Alert.alert('⚠️ Adresse requise', 'Veuillez entrer une adresse pour continuer');
       return;
     }
 
-    // Appeler la fonction de soumission
-    onSubmit({
-      client: {
-        nom: formData.nom,
-        adresse: formData.adresse.trim(),
-        telephone: formData.telephone,
-        courriel: formData.courriel
-      },
-      notes: formData.notes || 'Assignment créé depuis l\'app mobile - À compléter sur le terrain'
-    });
+    if (isEditMode && initialData) {
+      // Mode édition : passer l'objet complet mis à jour
+      const updatedAssignment = {
+        ...initialData,
+        client: {
+          nom: formData.nom,
+          adresse: formData.adresse.trim(),
+          telephone: formData.telephone,
+          courriel: formData.courriel
+        },
+        notes: formData.notes,
+        displayName: formData.adresse.trim(),
+        updatedAt: Date.now()
+      };
+      
+      onSubmit(updatedAssignment, true); // true = mode édition
+    } else {
+      // Mode création : format normal
+      onSubmit({
+        client: {
+          nom: formData.nom,
+          adresse: formData.adresse.trim(),
+          telephone: formData.telephone,
+          courriel: formData.courriel
+        },
+        notes: formData.notes || 'Assignment créé depuis l\'app mobile - À compléter sur le terrain'
+      }, false); // false = mode création
+    }
     
     // Reset form
-    setFormData({
-      nom: '',
-      adresse: '',
-      telephone: '',
-      courriel: '',
-      notes: ''
-    });
+    handleClose();
   };
 
   const handleInputChange = (field, value) => {
@@ -91,24 +125,25 @@ const AssignmentModal = ({ visible, onClose, onSubmit }) => {
       presentationStyle="pageSheet"
     >
       <SafeAreaView style={styles.container}>
-        {/* AJOUT IMPORTANT : KeyboardAvoidingView pour gérer le clavier */}
         <KeyboardAvoidingView 
           style={{ flex: 1 }} 
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
         >
-          {/* Header - reste en haut */}
+          {/* Header */}
           <View style={styles.header}>
             <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
               <FontAwesome5 name="times" size={20} color="white" />
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>Nouvelle Soumission</Text>
+            <Text style={styles.headerTitle}>
+              {isEditMode ? 'Modifier l\'assignment' : 'Nouvelle Soumission'}
+            </Text>
             <TouchableOpacity onPress={handleSubmit} style={styles.saveButton}>
               <FontAwesome5 name="check" size={20} color="white" />
             </TouchableOpacity>
           </View>
 
-          {/* ScrollView pour permettre le défilement quand le clavier est ouvert */}
+          {/* ScrollView pour le contenu */}
           <ScrollView 
             style={styles.content}
             contentContainerStyle={styles.scrollContent}
@@ -116,11 +151,19 @@ const AssignmentModal = ({ visible, onClose, onSubmit }) => {
             showsVerticalScrollIndicator={false}
           >
             {/* Section Info */}
-            <View style={styles.infoSection}>
-              <FontAwesome5 name="info-circle" size={40} color="#1976d2" />
-              <Text style={styles.infoTitle}>Nouvelle soumission</Text>
-              <Text style={styles.infoSubtitle}>
-                Job a aller voir 
+            <View style={[styles.infoSection, isEditMode && styles.infoSectionEdit]}>
+              <FontAwesome5 
+                name={isEditMode ? "edit" : "info-circle"} 
+                size={40} 
+                color={isEditMode ? "#ff9800" : "#1976d2"} 
+              />
+              <Text style={[styles.infoTitle, isEditMode && styles.infoTitleEdit]}>
+                {isEditMode ? 'Modifier l\'assignment' : 'Nouvelle soumission'}
+              </Text>
+              <Text style={[styles.infoSubtitle, isEditMode && styles.infoSubtitleEdit]}>
+                {isEditMode 
+                  ? 'Modifiez les informations ci-dessous' 
+                  : 'Job à aller voir'}
               </Text>
             </View>
 
@@ -134,13 +177,13 @@ const AssignmentModal = ({ visible, onClose, onSubmit }) => {
                 <TextInput
                   style={styles.input}
                   value={formData.nom}
-                  onChangeText={(text) => handleInputChange('nom', text)}
-                  placeholder="Nom complet"
-                  placeholderTextColor="#9ca3af"
+                  onChangeText={(value) => handleInputChange('nom', value)}
+                  placeholder="Nom complet du client"
+                  placeholderTextColor="#9e9e9e"
                 />
               </View>
 
-              {/* Adresse - OBLIGATOIRE */}
+              {/* Adresse */}
               <View style={styles.inputGroup}>
                 <Text style={[styles.label, styles.requiredLabel]}>
                   Adresse des travaux *
@@ -148,13 +191,13 @@ const AssignmentModal = ({ visible, onClose, onSubmit }) => {
                 <TextInput
                   style={[styles.input, styles.requiredInput]}
                   value={formData.adresse}
-                  onChangeText={(text) => handleInputChange('adresse', text)}
-                  placeholder="Adresse complète (obligatoire)"
-                  placeholderTextColor="#dc2626"
+                  onChangeText={(value) => handleInputChange('adresse', value)}
+                  placeholder="Adresse complète du projet"
+                  placeholderTextColor="#9e9e9e"
                 />
               </View>
 
-              {/* Téléphone et Courriel */}
+              {/* Groupe téléphone et courriel */}
               <View style={styles.rowInputs}>
                 <View style={styles.halfInput}>
                   <Text style={styles.label}>Téléphone</Text>
@@ -163,46 +206,44 @@ const AssignmentModal = ({ visible, onClose, onSubmit }) => {
                     value={formData.telephone}
                     onChangeText={handlePhoneChange}
                     placeholder="514-123-4567"
-                    placeholderTextColor="#9ca3af"
+                    placeholderTextColor="#9e9e9e"
                     keyboardType="phone-pad"
                     maxLength={12}
                   />
                 </View>
-                
+
                 <View style={styles.halfInput}>
                   <Text style={styles.label}>Courriel</Text>
                   <TextInput
                     style={styles.input}
                     value={formData.courriel}
-                    onChangeText={(text) => handleInputChange('courriel', text)}
+                    onChangeText={(value) => handleInputChange('courriel', value)}
                     placeholder="email@exemple.com"
-                    placeholderTextColor="#9ca3af"
+                    placeholderTextColor="#9e9e9e"
                     keyboardType="email-address"
                     autoCapitalize="none"
+                    autoCorrect={false}
                   />
                 </View>
               </View>
 
-              {/* Notes spéciales - LE CHAMP PROBLÉMATIQUE */}
+              {/* Notes spéciales */}
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>Notes additionnelles</Text>
+                <Text style={styles.label}>Instructions pour l'équipe terrain</Text>
                 <TextInput
                   style={[styles.input, styles.textArea]}
                   value={formData.notes}
-                  onChangeText={(text) => handleInputChange('notes', text)}
-                  placeholder="Instructions spéciales, accès, contraintes, horaires..."
-                  placeholderTextColor="#9ca3af"
-                  multiline
+                  onChangeText={(value) => handleInputChange('notes', value)}
+                  placeholder="Détails importants, accès au toit, horaires préférés, contraintes spéciales..."
+                  placeholderTextColor="#9e9e9e"
+                  multiline={true}
                   numberOfLines={4}
                   textAlignVertical="top"
                 />
               </View>
 
-         
+            
             </View>
-
-            {/* Espace supplémentaire en bas pour le clavier */}
-            <View style={{ height: 50 }} />
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -213,10 +254,10 @@ const AssignmentModal = ({ visible, onClose, onSubmit }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: '#f4f6f8',
   },
   header: {
-    backgroundColor: '#3498db',
+    backgroundColor: '#2c3e50',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -257,6 +298,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#90caf9',
   },
+  infoSectionEdit: {
+    backgroundColor: '#fff3e0',
+    borderColor: '#ffb74d',
+  },
   infoTitle: {
     fontSize: 18,
     fontWeight: 'bold',
@@ -265,11 +310,17 @@ const styles = StyleSheet.create({
     marginBottom: 5,
     textAlign: 'center',
   },
+  infoTitleEdit: {
+    color: '#f57c00',
+  },
   infoSubtitle: {
     fontSize: 14,
     color: '#1565c0',
     textAlign: 'center',
     lineHeight: 20,
+  },
+  infoSubtitleEdit: {
+    color: '#e65100',
   },
   formSection: {
     backgroundColor: 'white',

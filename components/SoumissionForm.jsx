@@ -1,4 +1,3 @@
-import RNShare from 'react-native-share';
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   View, 
@@ -14,12 +13,10 @@ import {
   Dimensions, 
   KeyboardAvoidingView, 
   Linking, 
-  ActivityIndicator, 
-  PanResponder,
-  Animated
+  ActivityIndicator
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import FirebaseSync from '../firebaseSync'; // ✅ NOUVEAU - Remplacement de firebaseFunctions
+import FirebaseSync from '../firebaseSync';
 import { StatusBar } from 'expo-status-bar';
 import { FontAwesome5 } from '@expo/vector-icons';
 import CustomCamera from '../CustomCamera';
@@ -28,9 +25,6 @@ import { testFirebaseConnection } from '../firebase';
 import { storage } from '../firebase';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import ImageViewer from 'react-native-image-zoom-viewer';
-
-// 🔧 ÉTAPE 1 - AJOUTER CES FONCTIONS APRÈS LES IMPORTS
-// Placez ce code vers la ligne 20, après tous les imports
 
 // Fonction de validation Firebase (empêche les erreurs undefined)
 const validateFirebaseData = (data, path = '') => {
@@ -91,837 +85,165 @@ const createSafeSubmission = (formData, superficie, date, photos) => {
         totale: Number(superficie?.totale || 0)
       }, 
       plusieursEpaisseurs: Boolean(formData.plusieursEpaisseurs), 
-      dimensions: Array.isArray(formData.dimensions) ? formData.dimensions : [], 
-      parapets: Array.isArray(formData.parapets) ? formData.parapets : [], 
-      puitsLumiere: Array.isArray(formData.puitsLumiere) ? formData.puitsLumiere : [] 
+      dimensions: Array.isArray(formData.dimensions) ? 
+        formData.dimensions.map(dim => ({
+          name: String(dim.name || ''),
+          length: Number(dim.length || 0),
+          width: Number(dim.width || 0)
+        })) : []
     },
-    materiaux: { 
+    parapets: Array.isArray(formData.parapets) ? 
+      formData.parapets.map(parapet => ({
+        name: String(parapet.name || ''),
+        width: Number(parapet.width || 0),
+        length: Number(parapet.length || 0)
+      })) : [],
+    materiel: { 
       nbFeuilles: Number(formData.nbFeuilles || 0), 
-      nbMax: Number(formData.nbMax || 0), 
-      nbEvents: Number(formData.nbEvents || 0), 
       nbDrains: Number(formData.nbDrains || 0), 
-      trepiedElectrique: Number(formData.trepiedElectrique || 0) 
+      nbEventsPlomberie: Number(formData.nbEventsPlomberie || 0),
+      nbAerateurs: Number(formData.nbAerateurs || 0),
+      nbTrepiedElectrique: Number(formData.nbTrepiedElectrique || 0),
+      nbPuitsLumiere: Number(formData.puitsLumiere?.length || 0),
+      puitsLumiere: Array.isArray(formData.puitsLumiere) ? 
+        formData.puitsLumiere.map(puits => ({
+          name: String(puits.name || ''),
+          length: Number(puits.length || 0),
+          width: Number(puits.width || 0)
+        })) : []
     },
-    options: { 
+    accessoires: { 
       hydroQuebec: Boolean(formData.hydroQuebec), 
       grue: Boolean(formData.grue), 
       trackfall: Boolean(formData.trackfall) 
     },
     notes: String(formData.notes || ''),
-    photos: [], // Sera rempli après upload
-    photoCount: 0, // Sera mis à jour après upload
-    processed: true,
-    exported: true,
-    exportedAt: new Date().toISOString(),
+    photos: photos,
+    photoUrls: photos.map(p => p.firebaseUrl || p.localUri || p.uri).filter(Boolean),
+    isAssignment: isExistingAssignment,
+    assignmentId: isExistingAssignment ? String(formData.assignmentId || '') : null,
     status: 'captured',
-    wasAssignment: isExistingAssignment, // ✅ Toujours boolean maintenant
-    completedAt: new Date().toISOString(),
-    platform: 'mobile',
-    version: '1.0.0'
+    capturedAt: new Date().toISOString(),
+    lastModified: new Date().toISOString()
   };
 };
 
-const { width } = Dimensions.get('window');
-
-// Constantes pour l'auto-save
-const AUTOSAVE_KEY = 'SOUMISSION_DRAFT';
-const AUTOSAVE_DELAY = 2000; // 2 secondes de délai
-
-// Composant ImageViewer avec react-native-image-zoom-viewer
-const ImageViewerComponent = ({ photos, initialIndex, onClose }) => {
-  const [currentIndex, setCurrentIndex] = useState(initialIndex);
-  
-  const images = photos.map(photo => ({
-    url: photo.uri,
-    props: {
-      source: { uri: photo.uri }
-    }
-  }));
-
-  return (
-    <Modal visible={true} transparent={true} animationType="fade">
-      <ImageViewer
-        imageUrls={images}
-        index={currentIndex}
-        onCancel={onClose}
-        onChange={(index) => setCurrentIndex(index)}
-        enableSwipeDown={true}
-        enableImageZoom={true}
-        enablePreload={true}
-        saveToLocalByLongPress={false}
-        backgroundColor="white"
-        renderIndicator={() => null}
-        
-        renderHeader={() => (
-          <View style={[styles.modalHeader, { backgroundColor: 'rgba(255, 255, 255, 0.95)' }]}>
-            <Text style={[styles.modalPhotoCounter, { color: '#333' }]}>
-              {currentIndex + 1} / {photos.length}
-            </Text>
-            <TouchableOpacity 
-              style={styles.closeButtonFullScreen} 
-              onPress={onClose}
-              hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-            >
-              <FontAwesome5 name="times" size={24} color="#333" />
-            </TouchableOpacity>
-          </View>
-        )}
-        
-        loadingRender={() => (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#3498db" />
-            <Text style={styles.loadingText}>Chargement...</Text>
-          </View>
-        )}
-        
-        renderImage={(props) => {
-          return (
-            <Image
-              {...props}
-              style={[props.style, { backgroundColor: 'white' }]}
-              resizeMode="contain"
-            />
-          );
-        }}
-        
-        maxOverflow={0}
-        doubleClickInterval={300}
-        minScale={1}
-        maxScale={4}
-        onSwipeDown={onClose}
-        swipeDownThreshold={100}
-        footerContainerStyle={{ backgroundColor: 'transparent' }}
-      />
-    </Modal>
-  );
-};
-
-const UploadProgressModal = ({ uploadProgress, setUploadProgress }) => {
-  const [animatedWidth] = useState(new Animated.Value(0));
-  
-  // Animation de la barre de progression
-  useEffect(() => {
-    if (uploadProgress.visible) {
-      Animated.timing(animatedWidth, {
-        toValue: uploadProgress.percentage,
-        duration: 300,
-        useNativeDriver: false,
-      }).start();
-    }
-  }, [uploadProgress.percentage]);
-
-  if (!uploadProgress.visible) return null;
-
-  const { currentPhoto, totalPhotos, percentage, status, errors, startTime } = uploadProgress;
-  const isComplete = percentage === 100;
-  
-  // Calcul vitesse et temps estimé
-  const elapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
-  const photosPerSecond = currentPhoto / Math.max(elapsed, 1);
-  const remainingPhotos = totalPhotos - currentPhoto;
-  const estimatedTimeRemaining = remainingPhotos / Math.max(photosPerSecond, 0.1);
-  
-  return (
-    <Modal visible={true} transparent={true} animationType="fade">
-      <View style={styles.uploadModalOverlay}>
-        <View style={styles.uploadModalContainer}>
-          {/* Header avec icône animée */}
-          <View style={styles.uploadModalHeader}>
-            <View style={styles.uploadIconContainer}>
-              {isComplete ? (
-                <Animated.View style={{ transform: [{ scale: 1.2 }] }}>
-                  <FontAwesome5 name="check-circle" size={32} color="#27ae60" />
-                </Animated.View>
-              ) : (
-                <Animated.View style={{ 
-                  transform: [{ 
-                    rotate: animatedWidth.interpolate({
-                      inputRange: [0, 100],
-                      outputRange: ['0deg', '360deg']
-                    })
-                  }] 
-                }}>
-                  <FontAwesome5 name="cloud-upload-alt" size={32} color="#3498db" />
-                </Animated.View>
-              )}
-            </View>
-            <Text style={styles.uploadModalTitle}>
-              {isComplete ? '🎉 Upload terminé !' : '📤 Upload en cours...'}
-            </Text>
-            {!isComplete && estimatedTimeRemaining > 0 && (
-              <Text style={styles.timeEstimate}>
-                Temps estimé: {estimatedTimeRemaining < 60 
-                  ? `${Math.round(estimatedTimeRemaining)}s` 
-                  : `${Math.round(estimatedTimeRemaining/60)}min`}
-              </Text>
-            )}
-          </View>
-
-          {/* Barre de progression animée */}
-          <View style={styles.mainProgressContainer}>
-            <View style={styles.progressBarBackground}>
-              <Animated.View 
-                style={[
-                  styles.progressBarFill, 
-                  { 
-                    width: animatedWidth.interpolate({
-                      inputRange: [0, 100],
-                      outputRange: ['0%', '100%'],
-                      extrapolate: 'clamp',
-                    }),
-                    backgroundColor: isComplete ? '#27ae60' : '#3498db'
-                  }
-                ]} 
-              />
-            </View>
-            <View style={styles.progressTextContainer}>
-              <Text style={styles.percentageText}>{percentage}%</Text>
-              <Text style={styles.speedText}>
-                {photosPerSecond > 0 && `${photosPerSecond.toFixed(1)} photos/s`}
-              </Text>
-            </View>
-          </View>
-
-          {/* Statut détaillé */}
-          <View style={styles.uploadStatusContainer}>
-            <Text style={styles.uploadStatusText}>{status}</Text>
-            <View style={styles.statsContainer}>
-              <Text style={styles.uploadCounterText}>
-                📸 {currentPhoto}/{totalPhotos} photos
-              </Text>
-              {errors.length > 0 && (
-                <Text style={styles.errorCountText}>
-                  ⚠️ {errors.length} erreur{errors.length > 1 ? 's' : ''}
-                </Text>
-              )}
-            </View>
-          </View>
-
-          {/* Grille des photos avec statut */}
-          {totalPhotos > 0 && totalPhotos <= 12 && (
-            <View style={styles.photoStatusContainer}>
-              <Text style={styles.photoStatusTitle}>Progression:</Text>
-              <View style={styles.photoIconsGrid}>
-                {Array.from({ length: totalPhotos }, (_, index) => {
-                  const photoNumber = index + 1;
-                  let iconName = 'clock';
-                  let iconColor = '#bdc3c7';
-                  let bgColor = '#ecf0f1';
-                  
-                  if (photoNumber < currentPhoto) {
-                    iconName = 'check-circle';
-                    iconColor = '#27ae60';
-                    bgColor = '#d5f4e6';
-                  } else if (photoNumber === currentPhoto && !isComplete) {
-                    iconName = 'upload';
-                    iconColor = '#3498db';
-                    bgColor = '#dff3ff';
-                  }
-                  
-                  return (
-                    <Animated.View 
-                      key={index} 
-                      style={[
-                        styles.photoIconWrapper,
-                        { backgroundColor: bgColor }
-                      ]}
-                    >
-                      <FontAwesome5 name={iconName} size={12} color={iconColor} />
-                      <Text style={[styles.photoIconNumber, { color: iconColor }]}>
-                        {photoNumber}
-                      </Text>
-                    </Animated.View>
-                  );
-                })}
-              </View>
-            </View>
-          )}
-
-          {/* Résumé final */}
-          {isComplete && (
-            <View style={styles.completionSummary}>
-              <Text style={styles.summaryText}>
-                ✅ {totalPhotos - errors.length} photos uploadées avec succès
-              </Text>
-              {errors.length > 0 && (
-                <Text style={styles.summaryErrorText}>
-                  ⚠️ {errors.length} photo{errors.length > 1 ? 's' : ''} échouée{errors.length > 1 ? 's' : ''}
-                </Text>
-              )}
-              <Text style={styles.summaryTimeText}>
-                ⏱️ Terminé en {Math.round(elapsed)}s
-              </Text>
-            </View>
-          )}
-
-          {/* Erreurs détaillées (max 3) */}
-          {errors.length > 0 && (
-            <View style={styles.errorsContainer}>
-              <Text style={styles.errorsTitle}>⚠️ Détails des erreurs:</Text>
-              {errors.slice(0, 3).map((error, index) => (
-                <Text key={index} style={styles.errorText}>• {error}</Text>
-              ))}
-              {errors.length > 3 && (
-                <Text style={styles.errorText}>... et {errors.length - 3} autres</Text>
-              )}
-            </View>
-          )}
-
-          {/* Bouton fermer (visible seulement si terminé) */}
-          {isComplete && (
-            <TouchableOpacity 
-              style={styles.closeUploadButton}
-              onPress={() => setUploadProgress(prev => ({ ...prev, visible: false }))}
-            >
-              <Text style={styles.closeUploadButtonText}>Continuer</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
-    </Modal>
-  );
-};
-
-const SoumissionForm = ({ prefilledData = null, onReturn, onComplete }) => {
-  const autoSaveTimerRef = useRef(null);
-  const isRestoringRef = useRef(false);
-  
-  // État pour savoir si on a un brouillon
-  const [hasDraft, setHasDraft] = useState(false);
-
+const SoumissionForm = ({ onReturn, prefilledData = null }) => {
   const [formData, setFormData] = useState({
-    nom: prefilledData?.client?.nom || '',
-    adresse: prefilledData?.client?.adresse || '',
-    telephone: prefilledData?.client?.telephone || '',
-    courriel: prefilledData?.client?.courriel || '',
-    dimensions: prefilledData?.toiture?.dimensions || [{ length: 0, width: 0, name: '' }],  
-    parapets: prefilledData?.toiture?.parapets || [{ length: 0, width: 0, name: '' }],
-    puitsLumiere: prefilledData?.toiture?.puitsLumiere || [{ length: 0, width: 0, name: '' }],
-    nbFeuilles: prefilledData?.materiaux?.nbFeuilles || 0,
-    nbMax: prefilledData?.materiaux?.nbMax || 0,
-    nbEvents: prefilledData?.materiaux?.nbEvents || 0,
-    nbDrains: prefilledData?.materiaux?.nbDrains || 0,
-    trepiedElectrique: prefilledData?.materiaux?.trepiedElectrique || 0,
-    plusieursEpaisseurs: prefilledData?.options?.plusieursEpaisseurs || false,
-    hydroQuebec: prefilledData?.options?.hydroQuebec || false,
-    grue: prefilledData?.options?.grue || false,
-    trackfall: prefilledData?.options?.trackfall || false,
-    notes: prefilledData?.notes || '',
-    isAssignment: !!prefilledData,
-    assignmentId: prefilledData?.id || null,
+    nom: '',
+    adresse: '',
+    telephone: '',
+    courriel: '',
+    dimensions: [{ length: 0, width: 0, name: '' }],
+    parapets: [{ length: 0, width: 0, name: '' }],
+    puitsLumiere: [],
+    plusieursEpaisseurs: false,
+    nbFeuilles: 0,
+    nbDrains: 0,
+    nbEventsPlomberie: 0,
+    nbAerateurs: 0,
+    nbTrepiedElectrique: 0,
+    hydroQuebec: false,
+    grue: false,
+    trackfall: false,
+    notes: '',
+    isAssignment: false,
+    assignmentId: null,
+    // Nouveau: support pour sections multiples
+    hasMultipleSections: false,
+    currentSectionIndex: 0,
+    sections: []
   });
 
-  const [superficie, setSuperficie] = useState({ toiture: 0, parapets: 0, totale: 0 });
-  const [photos, setPhotos] = useState(() => {
-    if (prefilledData?.photos && prefilledData.photos.length > 0) {
-      return prefilledData.photos.map((photoUrl, index) => {
-        if (typeof photoUrl === 'string') {
-          return {
-            id: `photo_${index}_${Date.now()}`,
-            uri: photoUrl
-          };
-        }
-        return photoUrl;
-      });
-    }
-    return [];
-  });
-  
-  const [selectedPhoto, setSelectedPhoto] = useState(null);
-  const [notification, setNotification] = useState({ visible: false, message: '', type: '' });
-  const [date] = useState(new Date());
-  const [openSections, setOpenSections] = useState(['client', 'dimensions', 'parapets', 'materiaux', 'options', 'notes', 'photos']);
+  const [photos, setPhotos] = useState([]);
   const [showCamera, setShowCamera] = useState(false);
+  const [showImageViewer, setShowImageViewer] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [notification, setNotification] = useState({ visible: false, message: '', type: 'success' });
+  const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({
-    visible: false,
-    currentPhoto: 0,
-    totalPhotos: 0,
+    current: 0,
+    total: 0,
     percentage: 0,
-    status: 'Préparation...',
-    errors: []
+    status: 'preparing'
   });
+  const [forceRefresh, setForceRefresh] = useState(0);
 
-  // Fonction pour sauvegarder le brouillon (silencieusement)
-  const saveDraft = async () => {
-    try {
-      const draftData = {
-        formData,
-        photos: photos.map(photo => ({
-          id: photo.id,
-          uri: photo.uri,
-          // Ne pas sauvegarder les URIs Firebase pour éviter les problèmes
-          isLocal: !photo.uri.startsWith('https://firebasestorage.googleapis.com')
-        })),
-        superficie,
-        openSections,
-        timestamp: new Date().toISOString(),
-        isAssignment: formData.isAssignment,
-        assignmentId: formData.assignmentId
+  // Effet pour charger les données préfillées
+  useEffect(() => {
+    if (prefilledData) {
+      const loadPrefilledData = async () => {
+        try {
+          const cleanData = validateFirebaseData(prefilledData);
+          
+          setFormData({
+            nom: cleanData.client?.nom || '',
+            adresse: cleanData.client?.adresse || '',
+            telephone: cleanData.client?.telephone || '',
+            courriel: cleanData.client?.courriel || '',
+            dimensions: cleanData.toiture?.dimensions?.length > 0 ? 
+              cleanData.toiture.dimensions : [{ length: 0, width: 0, name: '' }],
+            parapets: cleanData.parapets?.length > 0 ? 
+              cleanData.parapets : [{ length: 0, width: 0, name: '' }],
+            puitsLumiere: cleanData.materiel?.puitsLumiere || [],
+            plusieursEpaisseurs: cleanData.toiture?.plusieursEpaisseurs || false,
+            nbFeuilles: cleanData.materiel?.nbFeuilles || 0,
+            nbDrains: cleanData.materiel?.nbDrains || 0,
+            nbEventsPlomberie: cleanData.materiel?.nbEventsPlomberie || 0,
+            nbAerateurs: cleanData.materiel?.nbAerateurs || 0,
+            nbTrepiedElectrique: cleanData.materiel?.nbTrepiedElectrique || 0,
+            hydroQuebec: cleanData.accessoires?.hydroQuebec || false,
+            grue: cleanData.accessoires?.grue || false,
+            trackfall: cleanData.accessoires?.trackfall || false,
+            notes: cleanData.notes || '',
+            isAssignment: true,
+            assignmentId: cleanData.id,
+            hasMultipleSections: false,
+            currentSectionIndex: 0,
+            sections: []
+          });
+
+          if (cleanData.photoUrls && cleanData.photoUrls.length > 0) {
+            const photosWithUrls = cleanData.photoUrls.map((url, index) => ({
+              id: `photo_${Date.now()}_${index}`,
+              uri: url,
+              firebaseUrl: url,
+              isFromFirebase: true
+            }));
+            setPhotos(photosWithUrls);
+          }
+        } catch (error) {
+          console.error('Erreur chargement données préremplies:', error);
+        }
       };
       
-      await AsyncStorage.setItem(AUTOSAVE_KEY, JSON.stringify(draftData));
-      setHasDraft(true);
-      
-    } catch (error) {
-      console.error('Erreur sauvegarde brouillon:', error);
+      loadPrefilledData();
     }
+  }, [prefilledData]);
+
+  // Calculer superficie
+  const superficie = {
+    toiture: formData.dimensions.reduce((sum, dim) => sum + (dim.length * dim.width), 0),
+    parapets: formData.parapets.reduce((sum, parapet) => sum + ((parapet.width / 12) * parapet.length), 0), // Convertir pouces en pieds
+    totale: 0
   };
+  superficie.totale = superficie.toiture + superficie.parapets;
 
-  // Fonction pour charger le brouillon (silencieusement)
-  const loadDraftData = async () => {
-    try {
-      const draftString = await AsyncStorage.getItem(AUTOSAVE_KEY);
-      if (draftString) {
-        const draft = JSON.parse(draftString);
-        
-        // Ne charger le brouillon que si on n'est pas en train d'éditer un assignment existant
-        // ou si c'est le même assignment
-        if (!prefilledData || (draft.assignmentId === prefilledData?.id)) {
-          // Restauration automatique silencieuse
-          isRestoringRef.current = true;
-          setFormData(draft.formData);
-          setSuperficie(draft.superficie);
-          setOpenSections(draft.openSections || ['client', 'dimensions', 'parapets', 'materiaux', 'options', 'notes', 'photos']);
-          
-          // Restaurer uniquement les photos locales
-          const localPhotos = draft.photos.filter(photo => photo.isLocal);
-          setPhotos(localPhotos);
-          
-          setHasDraft(true);
-          
-          setTimeout(() => {
-            isRestoringRef.current = false;
-          }, 1000);
-        }
-      }
-    } catch (error) {
-      console.error('Erreur chargement brouillon:', error);
-    }
-  };
-
-  // Nettoyer le brouillon
-  const clearDraft = async () => {
-    try {
-      await AsyncStorage.removeItem(AUTOSAVE_KEY);
-      setHasDraft(false);
-    } catch (error) {
-      console.error('Erreur suppression brouillon:', error);
-    }
-  };
-
-  // Charger le brouillon au démarrage
-  useEffect(() => {
-    if (!global.skipDraftLoad) {
-      loadDraftData();
-    }
-    // Réinitialiser le flag
-    global.skipDraftLoad = false;
-  }, []);
-
-  // Auto-save avec debounce
-  useEffect(() => {
-    // Ne pas sauvegarder pendant la restauration ou si pas de changements
-    if (isRestoringRef.current) return;
-    
-    // Vérifier si on a des données à sauvegarder
-    const hasData = formData.nom || formData.adresse || formData.telephone || 
-                   formData.courriel || formData.notes || photos.length > 0 ||
-                   formData.nbFeuilles > 0 || formData.nbMax > 0 || 
-                   formData.nbEvents > 0 || formData.nbDrains > 0;
-    
-    if (!hasData) return;
-    
-    // Clear previous timer
-    if (autoSaveTimerRef.current) {
-      clearTimeout(autoSaveTimerRef.current);
-    }
-    
-    // Set new timer
-    autoSaveTimerRef.current = setTimeout(() => {
-      saveDraft();
-    }, AUTOSAVE_DELAY);
-    
-    // Cleanup
-    return () => {
-      if (autoSaveTimerRef.current) {
-        clearTimeout(autoSaveTimerRef.current);
-      }
-    };
-  }, [formData, photos, superficie, openSections]);
-
-  // Formatage du numéro de téléphone
-  const formatPhoneNumber = (value) => {
-    const cleaned = value.replace(/\D/g, '');
-    const limited = cleaned.slice(0, 10);
-    if (limited.length >= 6) {
-      return `${limited.slice(0, 3)}-${limited.slice(3, 6)}-${limited.slice(6)}`;
-    } else if (limited.length >= 3) {
-      return `${limited.slice(0, 3)}-${limited.slice(3)}`;
-    }
-    return limited;
-  };
-
+  // Gérer changement de téléphone avec formatage
   const handlePhoneChange = (text) => {
-    const formatted = formatPhoneNumber(text);
+    const cleaned = text.replace(/\D/g, '');
+    let formatted = cleaned;
+    
+    if (cleaned.length >= 6) {
+      formatted = `${cleaned.slice(0, 3)}-${cleaned.slice(3, 6)}-${cleaned.slice(6, 10)}`;
+    } else if (cleaned.length >= 3) {
+      formatted = `${cleaned.slice(0, 3)}-${cleaned.slice(3)}`;
+    }
+    
     setFormData({...formData, telephone: formatted});
   };
 
-  // Calcul des superficies
-  useEffect(() => {
-    let totalToiture = formData.dimensions.reduce((sum, section) => {
-      const length = parseFloat(section.length) || 0;
-      const width = parseFloat(section.width) || 0;
-      return sum + (length * width);
-    }, 0);
-
-    let totalParapets = formData.parapets.reduce((sum, parapet) => {
-      const lengthInFeet = parseFloat(parapet.length) || 0;
-      const widthInInches = parseFloat(parapet.width) || 0;
-      return sum + (lengthInFeet * (widthInInches / 12));
-    }, 0);
-
-    setSuperficie({
-      toiture: totalToiture,
-      parapets: totalParapets,
-      totale: Math.max(0, (totalToiture + totalParapets))
-    });
-
-    if (formData.nom === '' && formData.adresse === '') {
-      testFirebaseConnection();
-    }
-  }, [formData]);
-
-  // Partage avec RNShare
-  const shareWithRNShare = async () => {
-    try {
-      const report = generateEvernoteReport();
-      const subject = formData.adresse || 'Soumission Toiture';
-      
-      if (photos.length === 0) {
-        await RNShare.open({ message: report, title: subject, subject: subject });
-        return;
-      }
-
-      const reportFileName = `rapport_${(formData.nom || 'client').replace(/[^a-zA-Z0-9]/g, '_')}.txt`;
-      const reportPath = `${FileSystem.documentDirectory}${reportFileName}`;
-      
-      await FileSystem.writeAsStringAsync(reportPath, report);
-      const allFiles = [reportPath, ...photos.map(photo => photo.uri)];
-
-      await RNShare.open({
-        title: subject,
-        message: `Soumission complète avec ${photos.length} photo${photos.length > 1 ? 's' : ''}`,
-        urls: allFiles,
-        subject: subject,
-        showAppsToView: true,
-      });
-
-      setTimeout(async () => {
-        try {
-          await FileSystem.deleteAsync(reportPath, { idempotent: true });
-        } catch (error) {
-          console.log('Nettoyage fichier:', error);
-        }
-      }, 5000);
-
-    } catch (error) {
-      if (error.message === 'User did not share') {
-        console.log('Utilisateur a annulé le partage');
-        return;
-      }
-      console.error('Erreur react-native-share:', error);
-    }
-  };
-
-  // Génération du rapport
-  const generateEvernoteReport = () => {
-    const currentDate = new Date().toLocaleDateString('fr-CA');
-    const currentTime = new Date().toLocaleTimeString('fr-CA', { hour: '2-digit', minute: '2-digit' });
-    const materiauxtTotal = formData.nbFeuilles + formData.nbMax + formData.nbEvents + formData.nbDrains + formData.trepiedElectrique;
-
-    return `
-${formData.adresse || 'Projet'}
-===============================================
-Date: ${currentDate} à ${currentTime}
-Adresse: ${formData.adresse || 'Non spécifiée'}
-
-INFORMATIONS CLIENT
--------------------
-Nom: ${formData.nom || 'Non spécifié'}
-Adresse: ${formData.adresse || 'Non spécifiée'}
-Téléphone: ${formData.telephone || 'Non spécifié'}
-Courriel: ${formData.courriel || 'Non spécifié'}
-
-DIMENSIONS & SUPERFICIE
------------------------
-Superficie toiture: ${superficie.toiture.toFixed(2)} pi²
-Superficie parapets: ${superficie.parapets.toFixed(2)} pi²
-SUPERFICIE TOTALE: ${superficie.totale.toFixed(2)} pi²
-
-SECTIONS TOITURE:
-${formData.dimensions.map((section, index) => 
-  `   ${section.name || `Section ${index + 1}`}: ${section.length} x ${section.width} pi = ${(section.length * section.width).toFixed(2)} pi²`
-).join('\n')}
-
-PARAPETS:
-${formData.parapets.map((parapet, index) => 
-  `   ${parapet.name || `Parapet ${index + 1}`}: ${parapet.width} po x ${parapet.length} pi = ${(parapet.length * (parapet.width / 12)).toFixed(2)} pi²`
-).join('\n')}
-
-MATÉRIAUX ET ACCESSOIRES
-------------------------
-Feuilles de tôles: ${formData.nbFeuilles}
-Maximum: ${formData.nbMax}
-Évents: ${formData.nbEvents}
-Drains: ${formData.nbDrains}
-Trépied électrique: ${formData.trepiedElectrique}
-Total articles: ${materiauxtTotal}
-
-PUITS DE LUMIÈRE
-----------------
-${formData.puitsLumiere.map((puit, index) => 
-  `${puit.name}: ${puit.length}" x ${puit.width}"`
-).join('\n')}
-
-OPTIONS SPÉCIALES
------------------
-${formData.plusieursEpaisseurs ? '[X]' : '[ ]'} Plusieurs épaisseurs de toiture
-${formData.hydroQuebec ? '[X]' : '[ ]'} Travaux Hydro Québec requis
-${formData.grue ? '[X]' : '[ ]'} Grue nécessaire
-${formData.trackfall ? '[X]' : '[ ]'} Trackfall et chute
-
-NOTES SUPPLÉMENTAIRES
---------------------
-${formData.notes || 'Aucune note spéciale'}
-
-===============================================
-Généré automatiquement par SoumissionToiture App
-${currentDate} ${currentTime}
-`;
-  };
-
-  // Enregistrement complet
-  const handleEnregistrerComplet = async () => {
-    if (!formData.adresse.trim()) {
-      Alert.alert('Erreur', 'Adresse du projet requise');
-      return;
-    }
-
-    const hasPhotos = photos.length > 0;
-    
-    // Vérifier le nombre de photos avec avertissement
-    if (photos.length > 25) {
-      Alert.alert(
-        'Trop de photos',
-        `Vous avez ${photos.length} photos. Pour éviter les erreurs, la limite recommandée est de 20 photos.\n\nContinuer quand même ?`,
-        [
-          { text: 'Annuler', style: 'cancel' },
-          { text: 'Continuer', onPress: () => proceedWithSave() }
-        ]
-      );
-      return;
-    }
-    
-    // Avertissement pour 20-25 photos
-    if (photos.length >= 20) {
-      Alert.alert(
-        'Beaucoup de photos',
-        `Vous avez ${photos.length} photos. Cela peut prendre plus de temps à sauvegarder.\n\nContinuer ?`,
-        [
-          { text: 'Annuler', style: 'cancel' },
-          { text: 'Continuer', onPress: () => proceedWithSave() }
-        ]
-      );
-      return;
-    }
-    
-    // Procéder normalement si moins de 20 photos
-    proceedWithSave();
-  };
-
-  // Fonction helper pour procéder à la sauvegarde
-  const proceedWithSave = () => {
-    const hasPhotos = photos.length > 0;
-    
-    Alert.alert(
-      'Enregistrer la soumission',
-      hasPhotos 
-        ? `Enregistrer et partager la soumission avec ${photos.length} photo${photos.length > 1 ? 's' : ''} ?\n\n⏱️ Temps estimé: ${Math.ceil(photos.length * 3)} secondes`
-        : 'Enregistrer et partager la soumission (aucune photo) ?',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        { text: 'Enregistrer', onPress: async () => { await processCompleteSubmission(); }, style: 'default' }
-      ]
-    );
-  };
-
-  // ✅ FONCTION MODIFIÉE POUR UTILISER FIREBASESYNC
-  const processCompleteSubmission = async () => {
-    try {
-      console.log('🚀 Début sauvegarde soumission...');
-      
-      // Validation préliminaire
-      if (!formData.adresse || formData.adresse.trim() === '') {
-        Alert.alert('Erreur', 'Adresse du projet requise');
-        return;
-      }
-      
-      // Créer les données de base (sans photos)
-      const baseSubmission = createSafeSubmission(formData, superficie, date, photos);
-      
-      // Valider les données avant sauvegarde
-      const validatedSubmission = validateFirebaseData(baseSubmission);
-      
-      console.log('✅ Données validées pour Firebase');
-      
-      // Déterminer l'ID de soumission temporaire pour l'upload
-      const isExistingAssignment = Boolean(formData.isAssignment && formData.assignmentId);
-      const tempSubmissionId = isExistingAssignment ? formData.assignmentId : formData.adresse.trim()
-        .toLowerCase()
-        .replace(/[^a-zA-Z0-9\s]/g, '')
-        .replace(/\s+/g, '_')
-        .substring(0, 60);
-      
-      // Upload des photos avec FirebaseSync
-      const photoResult = await FirebaseSync.uploadPhotos(
-        tempSubmissionId, 
-        photos, 
-        setUploadProgress
-      );
-      
-      // Mettre à jour les données avec les photos
-      validatedSubmission.photos = photoResult.uploadedUrls;
-      validatedSubmission.photoCount = photoResult.uploadedUrls.length;
-      validatedSubmission.uploadStats = photoResult.stats;
-      
-      if (photoResult.errors.length > 0) {
-        validatedSubmission.uploadErrors = photoResult.errors;
-      }
-      
-      console.log(`📸 Photos: ${photoResult.stats.uploaded}/${photoResult.stats.total} uploadées`);
-      
-      // Sauvegarder avec FirebaseSync
-      let firebaseResult;
-      
-      if (isExistingAssignment) {
-        console.log('🔄 Mise à jour assignment existant...');
-        firebaseResult = await FirebaseSync.updateSubmission(
-          formData.assignmentId, 
-          {
-            ...validatedSubmission,
-            status: 'captured',
-            folderSlug: 'pending' // Déplacer vers "À compléter"
-          }
-        );
-      } else {
-        console.log('🆕 Création nouvelle soumission...');
-        firebaseResult = await FirebaseSync.createSubmission(
-          validatedSubmission,
-          'mobile'
-        );
-      }
-      
-      if (firebaseResult.success) {
-        console.log('✅ Soumission sauvegardée avec succès');
-        
-        // Nettoyer le brouillon après succès
-        await clearDraft();
-        
-        // Message de succès personnalisé selon les résultats
-        if (photoResult.errors.length === 0) {
-          Alert.alert(
-            'Succès !', 
-            `Soumission sauvegardée avec ${photoResult.stats.uploaded} photos`
-          );
-        } else {
-          Alert.alert(
-            'Sauvegarde réussie avec avertissements',
-            `Soumission sauvegardée.\n✅ ${photoResult.stats.uploaded} photos uploadées\n⚠️ ${photoResult.errors.length} photos échouées\n\nErreurs:\n${photoResult.errors.slice(0, 3).join('\n')}${photoResult.errors.length > 3 ? '\n...' : ''}`
-          );
-        }
-        
-        // Partager
-        setTimeout(async () => {
-          await shareWithRNShare();
-          setTimeout(() => {
-            if (onComplete) {
-              onComplete(firebaseResult.id || formData.assignmentId);
-            }
-          }, 1000);
-        }, 500);
-        
-      } else {
-        throw new Error(firebaseResult.error || 'Erreur sauvegarde Firebase');
-      }
-
-    } catch (error) {
-      console.error('❌ Erreur processCompleteSubmission:', error);
-      
-      Alert.alert(
-        'Erreur sauvegarde',
-        `Erreur: ${error.message}\n\nVos données sont sauvegardées en brouillon automatiquement.`,
-        [
-          { text: 'OK', style: 'default' },
-          { 
-            text: 'Réessayer', 
-            onPress: () => processCompleteSubmission() 
-          }
-        ]
-      );
-    }
-  };
-
-  // Réinitialisation du formulaire
-  const resetForm = async () => {
-    setFormData({
-      nom: '', adresse: '', telephone: '', courriel: '',
-      dimensions: [{ length: 0, width: 0, name: '' }],
-      parapets: [{ length: 0, width: 0, name: '' }],
-      puitsLumiere: [{ length: 0, width: 0, name: '' }],
-      nbFeuilles: 0, nbMax: 0, nbEvents: 0, nbDrains: 0, trepiedElectrique: 0,
-      plusieursEpaisseurs: false, hydroQuebec: false, grue: false, trackfall: false, notes: ''
-    });
-    setPhotos([]);
-    await clearDraft();
-  };
-
-  // Gestion des puits de lumière
-  const addPuitLumiere = () => {
-    setFormData({ ...formData, puitsLumiere: [...formData.puitsLumiere, { length: 0, width: 0, name: '' }] });
-  };
-
-  const removePuitLumiere = (index) => {
-    if (formData.puitsLumiere.length > 1) {
-      const newPuits = [...formData.puitsLumiere];
-      newPuits.splice(index, 1);
-      setFormData({...formData, puitsLumiere: newPuits});
-    }
-  };
-
-  const handlePuitLumiereChange = (index, field, value) => {
-    const newPuits = [...formData.puitsLumiere];
-    newPuits[index][field] = Number(value) || 0;
-    setFormData({...formData, puitsLumiere: newPuits});
-  };
-
-  // Notification
-  const showNotification = (message, type) => {
-    setNotification({ visible: true, message, type });
-    setTimeout(() => setNotification({ ...notification, visible: false }), 3000);
-  };
-
-  // Toggle sections
-  const toggleSection = (section) => {
-    setOpenSections(prevOpenSections => {
-      if (prevOpenSections.includes(section)) {
-        return prevOpenSections.filter(openSection => openSection !== section);
-      } else {
-        return [...prevOpenSections, section];
-      }
-    });
-  };
-
-  // Gestion des dimensions
+  // Fonctions pour dimensions
   const handleDimensionChange = (sectionIndex, field, value) => {
     const newDimensions = [...formData.dimensions];
     newDimensions[sectionIndex][field] = Number(value) || 0;
@@ -946,7 +268,7 @@ ${currentDate} ${currentTime}
     }
   };
 
-  // Gestion des parapets
+  // Fonctions pour parapets
   const addParapetSection = () => {
     setFormData({ ...formData, parapets: [...formData.parapets, { length: 0, width: 0, name: '' }] });
   };
@@ -959,7 +281,357 @@ ${currentDate} ${currentTime}
     }
   };
 
-  // Supprimer photo AVEC CONFIRMATION
+   /*Fonction pour créer une nouvelle section
+  const createNewSection = () => {
+    const currentSection = {
+      sectionName: `Section ${formData.sections.length + 1}`,
+      dimensions: formData.dimensions,
+      parapets: formData.parapets,
+      puitsLumiere: formData.puitsLumiere,
+      plusieursEpaisseurs: formData.plusieursEpaisseurs,
+      nbFeuilles: formData.nbFeuilles,
+      nbDrains: formData.nbDrains,
+      nbEventsPlomberie: formData.nbEventsPlomberie,
+      nbAerateurs: formData.nbAerateurs,
+      nbTrepiedElectrique: formData.nbTrepiedElectrique,
+      hydroQuebec: formData.hydroQuebec,
+      grue: formData.grue,
+      trackfall: formData.trackfall,
+      notes: formData.notes,
+      photos: photos,
+      superficie: superficie
+    };
+
+const handleSectionNameChange = (index, newName) => {
+  const newSections = [...formData.sections];
+  newSections[index] = {
+    ...newSections[index],
+    sectionName: newName
+  };
+  setFormData({
+    ...formData,
+    sections: newSections
+  });
+};
+
+    // Sauvegarder la section actuelle
+    const newSections = [...formData.sections];
+    if (formData.currentSectionIndex < formData.sections.length) {
+      newSections[formData.currentSectionIndex] = currentSection;
+    } else {
+      newSections.push(currentSection);
+    }
+
+    // Réinitialiser pour la nouvelle section mais garder les infos client
+    setFormData({
+      ...formData,
+      dimensions: [{ length: 0, width: 0, name: '' }],
+      parapets: [{ length: 0, width: 0, name: '' }],
+      puitsLumiere: [],
+      plusieursEpaisseurs: false,
+      nbFeuilles: 0,
+      nbDrains: 0,
+      nbEventsPlomberie: 0,
+      nbAerateurs: 0,
+      nbTrepiedElectrique: 0,
+      hydroQuebec: false,
+      grue: false,
+      trackfall: false,
+      notes: '',
+      hasMultipleSections: true,
+      sections: newSections,
+      currentSectionIndex: newSections.length
+    });
+    
+    setPhotos([]);
+    
+    Alert.alert(
+      'Nouvelle section créée',
+      `Section ${newSections.length} sauvegardée. Vous pouvez maintenant ajouter la section ${newSections.length + 1}.`,
+      [{ text: 'OK' }]
+    );
+  };*/
+
+  // Fonction pour naviguer entre les sections
+// CORRECTIONS POUR LES SECTIONS MULTIPLES
+
+// 1. CORRIGER switchToSection pour TOUJOURS sauvegarder le nom actuel:
+const switchToSection = (index) => {
+  // Récupérer le nom actuel depuis le state (pas depuis sections)
+  const currentSectionName = formData.sections[formData.currentSectionIndex]?.sectionName || '';
+  
+  // Sauvegarder la section actuelle avec TOUS ses données
+  const currentSection = {
+    sectionName: currentSectionName, // Utiliser le nom du state
+    dimensions: formData.dimensions,
+    parapets: formData.parapets,
+    puitsLumiere: formData.puitsLumiere,
+    plusieursEpaisseurs: formData.plusieursEpaisseurs,
+    nbFeuilles: formData.nbFeuilles,
+    nbDrains: formData.nbDrains,
+    nbEventsPlomberie: formData.nbEventsPlomberie,
+    nbAerateurs: formData.nbAerateurs,
+    nbTrepiedElectrique: formData.nbTrepiedElectrique,
+    hydroQuebec: formData.hydroQuebec,
+    grue: formData.grue,
+    trackfall: formData.trackfall,
+    notes: formData.notes,
+    photos: photos,
+    superficie: superficie
+  };
+
+  // Créer une nouvelle copie des sections
+  const newSections = [...formData.sections];
+  newSections[formData.currentSectionIndex] = currentSection;
+
+  // Charger la section demandée
+  const sectionToLoad = newSections[index] || {};
+  
+  // Mettre à jour TOUT le state en une fois
+  setFormData({
+    ...formData,
+    dimensions: sectionToLoad.dimensions || [{ length: 0, width: 0, name: '' }],
+    parapets: sectionToLoad.parapets || [{ length: 0, width: 0, name: '' }],
+    puitsLumiere: sectionToLoad.puitsLumiere || [],
+    plusieursEpaisseurs: sectionToLoad.plusieursEpaisseurs || false,
+    nbFeuilles: sectionToLoad.nbFeuilles || 0,
+    nbDrains: sectionToLoad.nbDrains || 0,
+    nbEventsPlomberie: sectionToLoad.nbEventsPlomberie || 0,
+    nbAerateurs: sectionToLoad.nbAerateurs || 0,
+    nbTrepiedElectrique: sectionToLoad.nbTrepiedElectrique || 0,
+    hydroQuebec: sectionToLoad.hydroQuebec || false,
+    grue: sectionToLoad.grue || false,
+    trackfall: sectionToLoad.trackfall || false,
+    notes: sectionToLoad.notes || '',
+    sections: newSections, // Sections mises à jour avec la section actuelle sauvegardée
+    currentSectionIndex: index
+  });
+  
+  setPhotos(sectionToLoad.photos || []);
+};
+
+// 2. CORRIGER createNewSection de la même façon:
+const createNewSection = () => {
+  // Récupérer le nom actuel depuis le state
+  const currentSectionName = formData.sections[formData.currentSectionIndex]?.sectionName || '';
+  
+  const currentSection = {
+    sectionName: currentSectionName, // Utiliser le nom du state
+    dimensions: formData.dimensions,
+    parapets: formData.parapets,
+    puitsLumiere: formData.puitsLumiere,
+    plusieursEpaisseurs: formData.plusieursEpaisseurs,
+    nbFeuilles: formData.nbFeuilles,
+    nbDrains: formData.nbDrains,
+    nbEventsPlomberie: formData.nbEventsPlomberie,
+    nbAerateurs: formData.nbAerateurs,
+    nbTrepiedElectrique: formData.nbTrepiedElectrique,
+    hydroQuebec: formData.hydroQuebec,
+    grue: formData.grue,
+    trackfall: formData.trackfall,
+    notes: formData.notes,
+    photos: photos,
+    superficie: superficie
+  };
+
+  // Sauvegarder la section actuelle
+  const newSections = [...formData.sections];
+  newSections[formData.currentSectionIndex] = currentSection;
+
+  // Ajouter une nouvelle section vide
+  const newSectionIndex = newSections.length;
+  const newSection = {
+    sectionName: '', // Nom vide pour la nouvelle section
+    dimensions: [{ length: 0, width: 0, name: '' }],
+    parapets: [{ length: 0, width: 0, name: '' }],
+    puitsLumiere: [],
+    plusieursEpaisseurs: false,
+    nbFeuilles: 0,
+    nbDrains: 0,
+    nbEventsPlomberie: 0,
+    nbAerateurs: 0,
+    nbTrepiedElectrique: 0,
+    hydroQuebec: false,
+    grue: false,
+    trackfall: false,
+    notes: '',
+    photos: [],
+    superficie: { toiture: 0, parapets: 0, totale: 0 }
+  };
+  
+  newSections.push(newSection);
+
+  // Réinitialiser pour la nouvelle section
+  setFormData({
+    ...formData,
+    dimensions: [{ length: 0, width: 0, name: '' }],
+    parapets: [{ length: 0, width: 0, name: '' }],
+    puitsLumiere: [],
+    plusieursEpaisseurs: false,
+    nbFeuilles: 0,
+    nbDrains: 0,
+    nbEventsPlomberie: 0,
+    nbAerateurs: 0,
+    nbTrepiedElectrique: 0,
+    hydroQuebec: false,
+    grue: false,
+    trackfall: false,
+    notes: '',
+    hasMultipleSections: true,
+    sections: newSections,
+    currentSectionIndex: newSectionIndex
+  });
+  
+  setPhotos([]);
+  
+
+};
+
+// 3. CORRIGER handleSaveSubmission pour sauvegarder TOUTES les données correctement:
+/*const handleSaveSubmission = async () => {
+  try {
+    // Validation
+    if (!formData.adresse || formData.adresse.trim() === '') {
+      showNotification('L\'adresse est requise', 'error');
+      return;
+    }
+
+    setShowUploadModal(true);
+    setUploadProgress({ current: 0, total: photos.length, status: 'uploading' });
+
+    // Préparer les données de base
+    const baseSubmission = {
+      date: new Date().toISOString().split('T')[0],
+      client: {
+        nom: formData.nom || '',
+        adresse: formData.adresse || '',
+        telephone: formData.telephone || '',
+        courriel: formData.courriel || ''
+      },
+      timestamp: Date.now(),
+      status: prefilledData ? 'captured' : 'pending',
+      capturedAt: Date.now()
+    };
+
+    // Si assignment prefilled
+    if (prefilledData && prefilledData.id) {
+      baseSubmission.id = prefilledData.id;
+    }
+
+    // Gérer les sections multiples
+    if (formData.hasMultipleSections) {
+      // D'ABORD sauvegarder la section actuelle avec son nom
+      const currentSectionName = formData.sections[formData.currentSectionIndex]?.sectionName || '';
+      
+      const currentSection = {
+        sectionName: currentSectionName,
+        dimensions: formData.dimensions,
+        parapets: formData.parapets,
+        puitsLumiere: formData.puitsLumiere,
+        plusieursEpaisseurs: formData.plusieursEpaisseurs,
+        nbFeuilles: formData.nbFeuilles,
+        nbDrains: formData.nbDrains,
+        nbEventsPlomberie: formData.nbEventsPlomberie,
+        nbAerateurs: formData.nbAerateurs,
+        nbTrepiedElectrique: formData.nbTrepiedElectrique,
+        hydroQuebec: formData.hydroQuebec,
+        grue: formData.grue,
+        trackfall: formData.trackfall,
+        notes: formData.notes,
+        photos: photos,
+        superficie: superficie
+      };
+      
+      // Mettre à jour toutes les sections
+      const allSections = [...formData.sections];
+      allSections[formData.currentSectionIndex] = currentSection;
+      
+      // Créer la soumission avec TOUTES les sections
+      const submission = {
+        ...baseSubmission,
+        hasMultipleSections: true,
+        sections: allSections,
+        
+        // Ajouter un résumé des sections
+        superficiesParSection: allSections.map(s => ({
+          sectionName: s.sectionName || `Section ${allSections.indexOf(s) + 1}`,
+          toiture: s.superficie?.toiture || 0,
+          parapets: s.superficie?.parapets || 0,
+          totale: s.superficie?.totale || 0
+        })),
+        
+        // Totaux globaux
+        superficieTotaleGlobale: allSections.reduce((sum, s) => sum + (s.superficie?.totale || 0), 0),
+        totalPhotos: allSections.reduce((sum, s) => sum + (s.photos?.length || 0), 0),
+        
+        // Pour compatibilité, ajouter les données de la première section au niveau racine
+        toiture: allSections[0]?.dimensions ? {
+          dimensions: allSections[0].dimensions,
+          plusieursEpaisseurs: allSections[0].plusieursEpaisseurs,
+          superficie: allSections[0].superficie
+        } : {},
+        parapets: allSections[0]?.parapets || [],
+        materiel: {
+          nbFeuilles: allSections[0]?.nbFeuilles || 0,
+          nbDrains: allSections[0]?.nbDrains || 0,
+          nbEventsPlomberie: allSections[0]?.nbEventsPlomberie || 0,
+          nbAerateurs: allSections[0]?.nbAerateurs || 0,
+          nbTrepiedElectrique: allSections[0]?.nbTrepiedElectrique || 0,
+          puitsLumiere: allSections[0]?.puitsLumiere || []
+        },
+        accessoires: {
+          hydroQuebec: allSections[0]?.hydroQuebec || false,
+          grue: allSections[0]?.grue || false,
+          trackfall: allSections[0]?.trackfall || false
+        },
+        notes: allSections.map(s => s.notes).filter(n => n).join('\n---\n') || '',
+        photos: allSections.flatMap(s => s.photos || [])
+      };
+      
+      // Sauvegarder
+      if (prefilledData && prefilledData.id) {
+        await FirebaseSync.updateSubmission(prefilledData.id, submission);
+      } else {
+        await FirebaseSync.createSubmission(submission, 'mobile');
+      }
+      
+    } else {
+      // Projet simple sans sections
+      const safeSoumission = createSafeSubmission(formData, superficie, new Date(), photos);
+      const submission = {
+        ...baseSubmission,
+        ...safeSoumission
+      };
+      
+      if (prefilledData && prefilledData.id) {
+        await FirebaseSync.updateSubmission(prefilledData.id, submission);
+      } else {
+        await FirebaseSync.createSubmission(submission, 'mobile');
+      }
+    }
+
+    setUploadProgress(prev => ({ ...prev, status: 'completed' }));
+
+    setTimeout(() => {
+      setShowUploadModal(false);
+      showNotification('Soumission enregistrée avec succès!', 'success');
+      setTimeout(() => {
+        onReturn();
+      }, 1500);
+    }, 1000);
+    
+  } catch (error) {
+    console.error('Erreur sauvegarde:', error);
+    setShowUploadModal(false);
+    showNotification('Erreur lors de la sauvegarde', 'error');
+  }
+};*/
+
+  // Gérer les photos
+  const handlePhotoTaken = (photo) => {
+    setPhotos([...photos, photo]);
+  };
+
   const deletePhoto = (id) => {
     Alert.alert(
       'Supprimer la photo',
@@ -977,17 +649,266 @@ ${currentDate} ${currentTime}
     );
   };
 
-  // Ouvrir caméra
+  const viewPhoto = (index) => {
+    setCurrentImageIndex(index);
+    setShowImageViewer(true);
+  };
+
   const openCustomCamera = () => {
     setShowCamera(true);
   };
 
-  // Gérer photo prise
-  const handlePhotoTaken = (photo) => {
-    setPhotos([...photos, photo]);
+  // Gestion des puits de lumière
+  const addPuitLumiere = () => {
+    setFormData({ ...formData, puitsLumiere: [...formData.puitsLumiere, { length: 0, width: 0, name: '' }] });
   };
 
-  // Header du formulaire (sans indicateur visuel)
+  const removePuitLumiere = (index) => {
+    if (formData.puitsLumiere.length > 1) {
+      const newPuits = [...formData.puitsLumiere];
+      newPuits.splice(index, 1);
+      setFormData({...formData, puitsLumiere: newPuits});
+    }
+  };
+
+  const handlePuitLumiereChange = (index, field, value) => {
+    const newPuits = [...formData.puitsLumiere];
+    newPuits[index][field] = Number(value) || 0;
+    setFormData({...formData, puitsLumiere: newPuits});
+  };
+
+  // Sauvegarder la soumission
+const handleSaveSubmission = async () => {
+  try {
+    // Validation
+    if (!formData.adresse || formData.adresse.trim() === '') {
+      showNotification('L\'adresse est requise', 'error');
+      return;
+    }
+
+    setShowUploadModal(true);
+    setUploadProgress({ current: 0, total: photos.length, status: 'uploading' });
+
+    // 📸 ÉTAPE 1: Créer d'abord la soumission pour obtenir l'ID
+    const tempSubmissionData = {
+      date: new Date().toISOString().split('T')[0],
+      client: {
+        nom: formData.nom || '',
+        adresse: formData.adresse || '',
+        telephone: formData.telephone || '',
+        courriel: formData.courriel || ''
+      },
+      timestamp: Date.now(),
+      status: prefilledData ? 'captured' : 'pending',
+      platform: 'mobile'
+    };
+
+    let submissionId;
+    
+    // Si c'est une mise à jour d'assignment
+    if (prefilledData && prefilledData.id) {
+      submissionId = prefilledData.id;
+    } else {
+      // Créer une nouvelle soumission temporaire pour obtenir l'ID
+      const createResult = await FirebaseSync.createSubmission(tempSubmissionData, 'mobile');
+      if (!createResult.success) {
+        throw new Error('Erreur lors de la création de la soumission');
+      }
+      submissionId = createResult.id;
+    }
+
+    // 📸 ÉTAPE 2: Uploader les photos sur Firebase Storage
+    let uploadedPhotos = [];
+    
+    if (photos.length > 0) {
+      console.log(`📤 Upload de ${photos.length} photos sur Firebase...`);
+      
+      const uploadResult = await FirebaseSync.uploadPhotos(
+        submissionId, 
+        photos,
+        (progress) => {
+          setUploadProgress({
+            current: progress.currentPhoto,
+            total: progress.totalPhotos,
+            percentage: progress.percentage,
+            status: progress.status || 'uploading'
+          });
+        }
+      );
+
+      if (!uploadResult.success && uploadResult.errors.length === photos.length) {
+        throw new Error('Échec de l\'upload de toutes les photos');
+      }
+
+      // Transformer les URLs en format compatible
+      uploadedPhotos = uploadResult.uploadedUrls.map((url, index) => ({
+        id: photos[index]?.id || `photo_${index}`,
+        uri: url, // URL Firebase au lieu du chemin local
+        url: url, // Ajouter aussi dans 'url' pour compatibilité
+        downloadURL: url, // Et dans 'downloadURL' pour être sûr
+        timestamp: photos[index]?.timestamp || new Date().toISOString()
+      }));
+
+      console.log(`✅ ${uploadedPhotos.length} photos uploadées sur Firebase`);
+    }
+
+    // 📝 ÉTAPE 3: Préparer les données complètes avec les URLs Firebase
+    setUploadProgress({ current: photos.length, total: photos.length, status: 'saving' });
+
+    // IMPORTANT: Sauvegarder la section actuelle AVANT tout si multi-sections
+    if (formData.hasMultipleSections) {
+      const currentSectionName = formData.sections[formData.currentSectionIndex]?.sectionName ?? '';
+      
+      const currentSection = {
+        sectionName: currentSectionName,
+        dimensions: formData.dimensions,
+        parapets: formData.parapets,
+        puitsLumiere: formData.puitsLumiere,
+        plusieursEpaisseurs: formData.plusieursEpaisseurs,
+        nbFeuilles: formData.nbFeuilles,
+        nbDrains: formData.nbDrains,
+        nbEventsPlomberie: formData.nbEventsPlomberie,
+        nbAerateurs: formData.nbAerateurs,
+        nbTrepiedElectrique: formData.nbTrepiedElectrique,
+        hydroQuebec: formData.hydroQuebec,
+        grue: formData.grue,
+        trackfall: formData.trackfall,
+        notes: formData.notes,
+        photos: uploadedPhotos, // Utiliser les photos uploadées
+        superficie: superficie
+      };
+      
+      // Mettre à jour formData.sections AVANT de continuer
+      formData.sections[formData.currentSectionIndex] = currentSection;
+    }
+
+    // Préparer la soumission finale
+    const safeSoumission = createSafeSubmission(formData, superficie, new Date(), uploadedPhotos);
+    
+    // 📤 ÉTAPE 4: Mettre à jour la soumission avec toutes les données
+    if (prefilledData && prefilledData.id) {
+      // Mise à jour d'un assignment existant
+      await FirebaseSync.updateSubmission(prefilledData.id, {
+        ...safeSoumission,
+        status: 'captured',
+        capturedAt: Date.now(),
+        photos: uploadedPhotos // S'assurer que les photos uploadées sont incluses
+      });
+    } else {
+      // Mise à jour de la soumission créée avec toutes les données
+      
+      // CODE POUR SECTIONS MULTIPLES
+      if (formData.hasMultipleSections) {
+        // Traiter toutes les sections pour remplacer les photos locales par les URLs Firebase
+        const allSectionsWithFirebasePhotos = formData.sections.map((section, sectionIndex) => {
+          // Pour la section courante, on a déjà les photos uploadées
+          if (sectionIndex === formData.currentSectionIndex) {
+            return {
+              ...section,
+              photos: uploadedPhotos
+            };
+          }
+          
+          // Pour les autres sections, garder leurs photos existantes
+          // (elles devraient déjà avoir des URLs Firebase si elles ont été sauvegardées avant)
+          return section;
+        });
+        
+        // Ajouter toutes les sections à la soumission
+        safeSoumission.hasMultipleSections = true;
+        safeSoumission.sections = allSectionsWithFirebasePhotos;
+        
+        // Logs pour débugger
+        console.log('SECTIONS À SAUVEGARDER:', allSectionsWithFirebasePhotos);
+        console.log('NOMBRE DE SECTIONS:', allSectionsWithFirebasePhotos.length);
+        
+        // Résumé des superficies
+        safeSoumission.superficiesParSection = allSectionsWithFirebasePhotos.reduce((acc, s, index) => {
+          acc[s.sectionName || `Section ${index + 1}`] = {
+            sectionName: s.sectionName || `Section ${index + 1}`,
+            toiture: s.superficie?.toiture || 0,
+            parapets: s.superficie?.parapets || 0,
+            totale: s.superficie?.totale || 0
+          };
+          return acc;
+        }, {});
+        
+        // Total global
+        safeSoumission.superficieTotaleGlobale = allSectionsWithFirebasePhotos.reduce((sum, s) => sum + (s.superficie?.totale || 0), 0);
+        safeSoumission.totalPhotos = allSectionsWithFirebasePhotos.reduce((sum, s) => sum + (s.photos?.length || 0), 0);
+      } else {
+        // Projet simple : s'assurer que les photos uploadées sont incluses
+        safeSoumission.photos = uploadedPhotos;
+      }
+      
+      // Mettre à jour la soumission avec toutes les données
+      await FirebaseSync.updateSubmission(submissionId, safeSoumission);
+    }
+
+    setUploadProgress(prev => ({ ...prev, status: 'completed' }));
+
+    setTimeout(() => {
+      setShowUploadModal(false);
+      showNotification('Soumission enregistrée avec succès!', 'success');
+      setTimeout(() => {
+        onReturn();
+      }, 1500);
+    }, 1000);
+    
+  } catch (error) {
+    console.error('Erreur sauvegarde:', error);
+    setShowUploadModal(false);
+    showNotification(error.message || 'Erreur lors de la sauvegarde', 'error');
+  }
+};
+
+  // Réinitialiser le formulaire
+  const resetForm = () => {
+    setFormData({
+      nom: '',
+      adresse: '',
+      telephone: '',
+      courriel: '',
+      dimensions: [{ length: 0, width: 0, name: '' }],
+      parapets: [{ length: 0, width: 0, name: '' }],
+      puitsLumiere: [],
+      plusieursEpaisseurs: false,
+      nbFeuilles: 0,
+      nbDrains: 0,
+      nbEventsPlomberie: 0,
+      nbAerateurs: 0,
+      nbTrepiedElectrique: 0,
+      hydroQuebec: false,
+      grue: false,
+      trackfall: false,
+      notes: '',
+      isAssignment: false,
+      assignmentId: null,
+      hasMultipleSections: false,
+      currentSectionIndex: 0,
+      sections: []
+    });
+    setPhotos([]);
+  };
+
+  // Notification
+  const showNotification = (message, type) => {
+    setNotification({ visible: true, message, type });
+    setTimeout(() => setNotification({ ...notification, visible: false }), 3000);
+  };
+
+  // Fonction de fermeture avec force refresh
+  const handleCameraClose = () => {
+    console.log('📸 Fermeture caméra appelée');
+    // D'abord, on cache le modal
+    setShowCamera(false);
+    // Ensuite, on force un délai pour s'assurer que tout est nettoyé
+    setTimeout(() => {
+      setForceRefresh(prev => prev + 1);
+      console.log('✅ Caméra complètement fermée');
+    }, 500); // Délai plus long pour être sûr
+  };
+
   const FormHeader = () => (
     <View style={styles.formHeader}>
       <TouchableOpacity style={styles.backButton} onPress={onReturn}>
@@ -1008,6 +929,20 @@ ${currentDate} ${currentTime}
     </View>
   );
 
+const updateCurrentSectionName = (newName) => {
+  const newSections = [...formData.sections];
+  if (newSections[formData.currentSectionIndex]) {
+    newSections[formData.currentSectionIndex] = {
+      ...newSections[formData.currentSectionIndex],
+      sectionName: newName  // Gardez newName même si c'est ''
+    };
+    setFormData({
+      ...formData,
+      sections: newSections
+    });
+  }
+};
+
   return (
     <View style={styles.container}>
       <FormHeader />
@@ -1015,32 +950,169 @@ ${currentDate} ${currentTime}
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView style={styles.scrollContainer} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 100 }}>
           
-          {/* Section Informations client */}
-          <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('client')}>
-            <FontAwesome5 name="user" size={20} color="white" />
-            <Text style={styles.sectionTitle}>Informations client</Text>
-            <FontAwesome5 name={openSections.includes('client') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-          </TouchableOpacity>
-          
-          {openSections.includes('client') && (
-            <View style={[styles.sectionContent, styles.nonPickerSection]}>
-              <Text style={styles.label}>Nom du client</Text>
-              <TextInput style={styles.input} value={formData.nom} onChangeText={text => setFormData({...formData, nom: text})} placeholder="Nom complet" />
+      {/* Section pour projets complexes avec multiples sections */}
+<View style={styles.sectionWrapper}>
+  <Text style={styles.compactSectionTitle}>
+    <FontAwesome5 name="layer-group" size={14} color="#2c3e50" /> Gestion des sections
+  </Text>
+  
+  <View style={styles.compactSectionContent}>
+    {!formData.hasMultipleSections ? (
+      <TouchableOpacity 
+        style={styles.multiSectionButton} 
+        onPress={() => {
+          Alert.alert(
+            'Projet avec sections multiples',
+            'Voulez-vous diviser ce projet en plusieurs sections distinctes ? Chaque section aura ses propres dimensions, photos et matériaux.',
+            [
+              { text: 'Annuler', style: 'cancel' },
+              { 
+                text: 'Activer', 
+                onPress: () => {
+                  setFormData({
+                    ...formData,
+                    hasMultipleSections: true,
+                    sections: [{
+                      sectionName: 'Section 1',
+                      dimensions: formData.dimensions,
+                      parapets: formData.parapets,
+                      puitsLumiere: formData.puitsLumiere,
+                      plusieursEpaisseurs: formData.plusieursEpaisseurs,
+                      nbFeuilles: formData.nbFeuilles,
+                      nbDrains: formData.nbDrains,
+                      nbEventsPlomberie: formData.nbEventsPlomberie,
+                      nbAerateurs: formData.nbAerateurs,
+                      nbTrepiedElectrique: formData.nbTrepiedElectrique,
+                      hydroQuebec: formData.hydroQuebec,
+                      grue: formData.grue,
+                      trackfall: formData.trackfall,
+                      notes: formData.notes,
+                      photos: photos,
+                      superficie: superficie
+                    }],
+                    currentSectionIndex: 0
+                  });
+                }
+              }
+            ]
+          );
+        }}
+      >
+        <FontAwesome5 name="layer-group" size={18} color="#3498db" />
+        <Text style={styles.multiSectionButtonText}>
+          Activer les sections multiples (projets complexes)
+        </Text>
+      </TouchableOpacity>
+    ) : (
+      <View>
+        {/* Champ pour le nom de la section actuelle */}
+        <View style={styles.sectionNameContainer}>
+          <Text style={styles.sectionNameLabel}>Nom de la section:</Text>
+       <TextInput
+  style={styles.sectionNameInput}
+  value={formData.sections[formData.currentSectionIndex]?.sectionName ?? ''}  // Utilisez ?? au lieu de ||
+  onChangeText={updateCurrentSectionName}
+  placeholder={`Section ${formData.currentSectionIndex + 1}`}
+  placeholderTextColor="#95a5a6"
+/>
+        </View>
+        
+        {/* Sélecteur de section */}
+        <View style={styles.sectionSelector}>
+          <Text style={styles.sectionSelectorTitle}>Naviguer entre les sections:</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={styles.sectionTabs}>
+              {formData.sections.map((section, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={[
+                    styles.sectionTab,
+                    formData.currentSectionIndex === index && styles.activeTab
+                  ]}
+                  onPress={() => switchToSection(index)}
+                >
+                  <Text style={[
+                    styles.sectionTabText,
+                    formData.currentSectionIndex === index && styles.activeTabText
+                  ]}>
+                    {section.sectionName || `Section ${index + 1}`}
+                  </Text>
+                  <Text style={styles.sectionTabInfo}>
+                    {section.photos?.length || 0} photos
+                  </Text>
+                  <Text style={styles.sectionTabInfo}>
+                    {(section.superficie?.totale || 0).toFixed(0)} pi²
+                  </Text>
+                </TouchableOpacity>
+              ))}
               
-              <Text style={styles.label}>Adresse des travaux *</Text>
-              <TextInput style={[styles.input, styles.requiredInput]} value={formData.adresse} onChangeText={text => setFormData({...formData, adresse: text})} placeholder="Adresse complète" />
+              {/* Bouton nouvelle section */}
+              <TouchableOpacity
+                style={[styles.sectionTab, styles.newSectionTab]}
+                onPress={createNewSection}
+              >
+                <FontAwesome5 name="plus" size={16} color="#3498db" />
+                <Text style={styles.newSectionTabText}>Nouvelle</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+        
+        {/* Résumé des sections */}
+        <View style={styles.sectionSummary}>
+          <Text style={styles.sectionSummaryText}>
+            Total: {formData.sections.length} section(s)
+          </Text>
+          <Text style={styles.sectionSummaryText}>
+            Photos totales: {formData.sections.reduce((sum, s) => sum + (s.photos?.length || 0), 0) + photos.length}
+          </Text>
+          <Text style={styles.sectionSummaryText}>
+            Superficie section actuelle: {superficie.totale.toFixed(2)} pi²
+          </Text>
+        </View>
+      </View>
+    )}
+  </View>
+</View>
+
+          {/* Section Informations client - Plus compacte */}
+          <View style={styles.sectionWrapper}>
+            <Text style={styles.compactSectionTitle}>
+              <FontAwesome5 name="user" size={14} color="#2c3e50" /> Informations client
+            </Text>
+            
+            <View style={styles.compactSectionContent}>
+              <View style={styles.inputGroup}>
+                <TextInput 
+                  style={styles.compactInput} 
+                  value={formData.nom} 
+                  onChangeText={text => setFormData({...formData, nom: text})} 
+                  placeholder="Nom du client"
+                  placeholderTextColor="#95a5a6"
+                />
+              </View>
               
-              <View style={styles.grid}>
-                <View style={styles.gridItem}>
-                  <Text style={styles.label}>Téléphone</Text>
+              <View style={styles.inputGroup}>
+                <TextInput 
+                  style={[styles.compactInput, styles.requiredInput]} 
+                  value={formData.adresse} 
+                  onChangeText={text => setFormData({...formData, adresse: text})} 
+                  placeholder="Adresse des travaux *"
+                  placeholderTextColor="#95a5a6"
+                />
+              </View>
+              
+              <View style={styles.gridRow}>
+                <View style={styles.halfWidth}>
                   <View style={styles.phoneContainer}>
                     <TextInput 
-                      style={[styles.input, styles.phoneInput]} 
+                      style={[styles.compactInput, styles.phoneInput]} 
                       value={formData.telephone} 
                       onChangeText={handlePhoneChange} 
-                      placeholder="514-783-2794" 
+                      placeholder="Téléphone" 
                       keyboardType="phone-pad" 
-                      maxLength={12} 
+                      maxLength={12}
+                      placeholderTextColor="#95a5a6"
                     />
                     {formData.telephone && formData.telephone.length >= 10 && (
                       <TouchableOpacity
@@ -1057,200 +1129,169 @@ ${currentDate} ${currentTime}
                     )}
                   </View>
                 </View>
-                <View style={styles.gridItem}>
-                  <Text style={styles.label}>Courriel</Text>
-                  <TextInput style={styles.input} value={formData.courriel} onChangeText={text => setFormData({...formData, courriel: text})} placeholder="email@exemple.com" keyboardType="email-address" />
+                
+                <View style={styles.halfWidth}>
+                  <TextInput 
+                    style={styles.compactInput} 
+                    value={formData.courriel} 
+                    onChangeText={text => setFormData({...formData, courriel: text})} 
+                    placeholder="Courriel" 
+                    keyboardType="email-address"
+                    placeholderTextColor="#95a5a6"
+                  />
                 </View>
               </View>
             </View>
-          )}
+          </View>
 
-          {/* Section Dimensions de la toiture */}
-          <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('dimensions')}>
-            <FontAwesome5 name="ruler-combined" size={20} color="white" />
-            <Text style={styles.sectionTitle}>Dimensions de la toiture</Text>
-            <FontAwesome5 name={openSections.includes('dimensions') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-          </TouchableOpacity>
-          
-          {openSections.includes('dimensions') && (
-            <View style={[styles.sectionContent, styles.pickerSection]}>
+          {/* Section Dimensions - Plus compacte */}
+          <View style={styles.sectionWrapper}>
+            <Text style={styles.compactSectionTitle}>
+              <FontAwesome5 name="ruler-combined" size={14} color="#2c3e50" /> Dimensions de la toiture
+            </Text>
+            
+            <View style={styles.compactSectionContent}>
               {formData.dimensions.map((section, index) => (
-                <View key={`dim-section-${index}`} style={styles.dimSetContainer}>
-                  <View style={styles.sectionHeaderRow}>
-                    <TextInput 
-                      style={styles.sectionNameInput} 
-                      value={section.name} 
-                      onChangeText={(text) => handleSectionNameChange(index, text)} 
-                      placeholder={`Section ${index + 1}`} 
+                <View key={`dim-${index}`} style={styles.dimensionItem}>
+                  <TextInput 
+                    style={styles.dimensionNameInput} 
+                    value={section.name} 
+                    onChangeText={(text) => handleSectionNameChange(index, text)} 
+                    placeholder={`Section ${index + 1}`}
+                    placeholderTextColor="#95a5a6"
+                  />
+                  
+                  <View style={styles.dimensionInputs}>
+                    <TextInput
+                      style={styles.dimensionNumberInput}
+                      value={section.length === 0 ? '' : section.length.toString()}
+                      onChangeText={(value) => handleDimensionChange(index, 'length', value)}
+                      keyboardType="numeric"
+                      placeholder="L"
+                      placeholderTextColor="#95a5a6"
                     />
-                  </View>
-                  
-                  <View style={styles.dimRow}>
-                    <View style={styles.pickerContainer}>
-                      <Text style={styles.pickerLabel}>Longueur (pieds)</Text>
-                      <TextInput
-                        style={styles.numberInput}
-                        value={section.length === 0 ? '' : section.length.toString()}
-                        onChangeText={(value) => handleDimensionChange(index, 'length', value)}
-                        keyboardType="numeric"
-                        placeholder="0"
-                      />
-                    </View>
                     
-                    <Text style={styles.multiply}>×</Text>
+                    <Text style={styles.dimensionX}>×</Text>
                     
-                    <View style={styles.pickerContainer}>
-                      <Text style={styles.pickerLabel}>Largeur (pieds)</Text>
-                      <TextInput
-                        style={styles.numberInput}
-                        value={section.width === 0 ? '' : section.width.toString()}
-                        onChangeText={(value) => handleDimensionChange(index, 'width', value)}
-                        keyboardType="numeric"
-                        placeholder="0"
-                      />
-                    </View>
+                    <TextInput
+                      style={styles.dimensionNumberInput}
+                      value={section.width === 0 ? '' : section.width.toString()}
+                      onChangeText={(value) => handleDimensionChange(index, 'width', value)}
+                      keyboardType="numeric"
+                      placeholder="l"
+                      placeholderTextColor="#95a5a6"
+                    />
+                    
+                    <Text style={styles.dimensionUnit}>pi²</Text>
+                    
+                    {index > 0 && (
+                      <TouchableOpacity onPress={() => removeDimensionSection(index)}>
+                        <FontAwesome5 name="times-circle" size={18} color="#e74c3c" />
+                      </TouchableOpacity>
+                    )}
                   </View>
-                  
-                  {index > 0 && (
-                    <TouchableOpacity style={styles.removeSectionButton} onPress={() => removeDimensionSection(index)}>
-                      <Text style={styles.deleteX}>✕</Text>
-                      <Text style={styles.removeSectionButtonText}>Supprimer cette section</Text>
-                    </TouchableOpacity>
-                  )}
                 </View>
               ))}
-
-              <View style={styles.addSectionButtonContainer}>
-                <TouchableOpacity style={styles.addSectionButton} onPress={addDimensionSection}>
-                  <Text style={{color: '#3498db', fontSize: 16}}>➕</Text>
-                  <Text style={styles.addSectionButtonText}>Ajouter une section</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={styles.totalSurfaceContainer}>
-                <Text style={styles.totalSurfaceLabel}>Superficie totale:</Text>
-                <Text style={styles.totalSurfaceValue}>{superficie.totale.toFixed(2)} pi²</Text>
+              
+              <TouchableOpacity style={styles.compactAddButton} onPress={addDimensionSection}>
+                <FontAwesome5 name="plus-circle" size={16} color="#3498db" />
+                <Text style={styles.compactAddButtonText}>Ajouter une section</Text>
+              </TouchableOpacity>
+              
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Total toiture (Section {formData.hasMultipleSections ? formData.currentSectionIndex + 1 : ''}):</Text>
+                <Text style={styles.totalValue}>{superficie.toiture.toFixed(2)} pi²</Text>
               </View>
             </View>
-          )}
+          </View>
 
-          {/* Section Dimensions des parapets */}
-          <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('parapets')}>
-            <FontAwesome5 name="ruler-vertical" size={20} color="white" />
-            <Text style={styles.sectionTitle}>Dimensions des parapets</Text>
-            <FontAwesome5 name={openSections.includes('parapets') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-          </TouchableOpacity>
-          
-          {openSections.includes('parapets') && (
-            <View style={[styles.sectionContent, styles.pickerSection]}>
+          {/* Section Parapets - Plus compacte avec largeur en pouces */}
+          <View style={styles.sectionWrapper}>
+            <Text style={styles.compactSectionTitle}>
+              <FontAwesome5 name="ruler-vertical" size={14} color="#2c3e50" /> Parapets
+            </Text>
+            
+            <View style={styles.compactSectionContent}>
               {formData.parapets.map((parapet, index) => (
-                <View key={`parapet-${index}`} style={styles.dimSetContainer}>
-                  <View style={styles.sectionHeaderRow}>
+                <View key={`parapet-${index}`} style={styles.dimensionItem}>
+                  <TextInput 
+                    style={styles.dimensionNameInput} 
+                    value={parapet.name} 
+                    onChangeText={(text) => {
+                      const newParapets = [...formData.parapets];
+                      newParapets[index].name = text;
+                      setFormData({...formData, parapets: newParapets});
+                    }} 
+                    placeholder={`Parapet ${index + 1}`}
+                    placeholderTextColor="#95a5a6"
+                  />
+                  
+                  <View style={styles.dimensionInputs}>
                     <TextInput
-                      style={styles.sectionNameInput}
-                      value={parapet.name}
-                      onChangeText={(text) => {
+                      style={styles.dimensionNumberInput}
+                      value={parapet.width === 0 ? '' : parapet.width.toString()}
+                      onChangeText={(value) => {
                         const newParapets = [...formData.parapets];
-                        newParapets[index].name = text;
+                        newParapets[index].width = Number(value) || 0;
                         setFormData({...formData, parapets: newParapets});
                       }}
-                      placeholder={`Parapet ${index + 1}`}
+                      keyboardType="numeric"
+                      placeholder="L (po)"
+                      placeholderTextColor="#95a5a6"
                     />
+                    
+                    <Text style={styles.dimensionX}>×</Text>
+                    
+                    <TextInput
+                      style={styles.dimensionNumberInput}
+                      value={parapet.length === 0 ? '' : parapet.length.toString()}
+                      onChangeText={(value) => {
+                        const newParapets = [...formData.parapets];
+                        newParapets[index].length = Number(value) || 0;
+                        setFormData({...formData, parapets: newParapets});
+                      }}
+                      keyboardType="numeric"
+                      placeholder="L (pi)"
+                      placeholderTextColor="#95a5a6"
+                    />
+                    
+                    <Text style={styles.dimensionUnit}>pi²</Text>
+                    
+                    {index > 0 && (
+                      <TouchableOpacity onPress={() => removeParapetSection(index)}>
+                        <FontAwesome5 name="times-circle" size={18} color="#e74c3c" />
+                      </TouchableOpacity>
+                    )}
                   </View>
-
-                  <View style={styles.dimRow}>
-                    <View style={styles.pickerContainer}>
-                      <Text style={styles.pickerLabel}>Largeur (pouces)</Text>
-                      <TextInput
-                        style={styles.numberInput}
-                        value={parapet.width === 0 ? '' : parapet.width.toString()}
-                        onChangeText={(value) => {
-                          const newParapets = [...formData.parapets];
-                          newParapets[index].width = Number(value) || 0;
-                          setFormData({...formData, parapets: newParapets});
-                        }}
-                        keyboardType="numeric"
-                        placeholder="0"
-                      />
-                    </View>
-
-                    <Text style={styles.multiply}>×</Text>
-
-                    <View style={styles.pickerContainer}>
-                      <Text style={styles.pickerLabel}>Longueur (pieds)</Text>
-                      <TextInput
-                        style={styles.numberInput}
-                        value={parapet.length === 0 ? '' : parapet.length.toString()}
-                        onChangeText={(value) => {
-                          const newParapets = [...formData.parapets];
-                          newParapets[index].length = Number(value) || 0;
-                          setFormData({...formData, parapets: newParapets});
-                        }}
-                        keyboardType="numeric"
-                        placeholder="0"
-                      />
-                    </View>
-                  </View>
-
-                  {index > 0 && (
-                    <TouchableOpacity style={styles.removeSectionButton} onPress={() => removeParapetSection(index)}>
-                      <Text style={styles.deleteX}>✕</Text>
-                      <Text style={styles.removeSectionButtonText}>Supprimer ce parapet</Text>
-                    </TouchableOpacity>
-                  )}
                 </View>
               ))}
-
-              <View style={styles.addSectionButtonContainer}>
-                <TouchableOpacity style={styles.addSectionButton} onPress={addParapetSection}>
-                  <Text style={{color: '#3498db', fontSize: 16}}>➕</Text>
-                  <Text style={styles.addSectionButtonText}>Ajouter un parapet</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={styles.totalSurfaceContainer}>
-                <Text style={styles.totalSurfaceLabel}>Superficie des parapets:</Text>
-                <Text style={styles.totalSurfaceValue}>{superficie.parapets.toFixed(2)} pi²</Text>
+              
+              <TouchableOpacity style={styles.compactAddButton} onPress={addParapetSection}>
+                <FontAwesome5 name="plus-circle" size={16} color="#3498db" />
+                <Text style={styles.compactAddButtonText}>Ajouter un parapet</Text>
+              </TouchableOpacity>
+              
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Total parapets (Section {formData.hasMultipleSections ? formData.currentSectionIndex + 1 : ''}):</Text>
+                <Text style={styles.totalValue}>{superficie.parapets.toFixed(2)} pi²</Text>
               </View>
             </View>
-          )}
+          </View>
 
-          {/* Section Matériaux et accessoires */}
-          <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('materiaux')}>
-            <FontAwesome5 name="tools" size={20} color="white" />
-            <Text style={styles.sectionTitle}>Matériaux et accessoires</Text>
-            <FontAwesome5 name={openSections.includes('materiaux') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-          </TouchableOpacity>
-          
-          {openSections.includes('materiaux') && (
-            <View style={[styles.sectionContent, styles.pickerSection]}>
+          {/* Section Matériaux - Style original avec pickerSection */}
+          <View style={styles.sectionWrapper}>
+            <Text style={styles.compactSectionTitle}>
+              <FontAwesome5 name="tools" size={14} color="#2c3e50" /> Matériaux et accessoires
+            </Text>
+            
+            <View style={[styles.compactSectionContent, styles.pickerSection]}>
               <View style={styles.materiauxGrid}>
                 <View style={styles.materiauxItem}>
                   <Text style={styles.label}>Feuilles de tôles</Text>
                   <TextInput
                     style={styles.numberInput}
                     value={formData.nbFeuilles === 0 ? '' : formData.nbFeuilles.toString()}
-                    onChangeText={(value) => setFormData({...formData, nbFeuilles: Number(value) || 0})}
-                    keyboardType="numeric"
-                    placeholder="0"
-                  />
-                </View>
-                
-                <View style={styles.materiauxItem}>
-                  <Text style={styles.label}>Maximum</Text>
-                  <TextInput
-                    style={styles.numberInput}
-                    value={formData.nbMax === 0 ? '' : formData.nbMax.toString()}
-                    onChangeText={(value) => setFormData({...formData, nbMax: Number(value) || 0})}
-                    keyboardType="numeric"
-                    placeholder="0"
-                  />
-                </View>
-                
-                <View style={styles.materiauxItem}>
-                  <Text style={styles.label}>Évents</Text>
-                  <TextInput
-                    style={styles.numberInput}
-                    value={formData.nbEvents === 0 ? '' : formData.nbEvents.toString()}
-                    onChangeText={(value) => setFormData({...formData, nbEvents: Number(value) || 0})}
+                    onChangeText={text => setFormData({...formData, nbFeuilles: Number(text) || 0})}
                     keyboardType="numeric"
                     placeholder="0"
                   />
@@ -1261,7 +1302,29 @@ ${currentDate} ${currentTime}
                   <TextInput
                     style={styles.numberInput}
                     value={formData.nbDrains === 0 ? '' : formData.nbDrains.toString()}
-                    onChangeText={(value) => setFormData({...formData, nbDrains: Number(value) || 0})}
+                    onChangeText={text => setFormData({...formData, nbDrains: Number(text) || 0})}
+                    keyboardType="numeric"
+                    placeholder="0"
+                  />
+                </View>
+                
+                <View style={styles.materiauxItem}>
+                  <Text style={styles.label}>Évents</Text>
+                  <TextInput
+                    style={styles.numberInput}
+                    value={formData.nbEventsPlomberie === 0 ? '' : formData.nbEventsPlomberie.toString()}
+                    onChangeText={text => setFormData({...formData, nbEventsPlomberie: Number(text) || 0})}
+                    keyboardType="numeric"
+                    placeholder="0"
+                  />
+                </View>
+                
+                <View style={styles.materiauxItem}>
+                  <Text style={styles.label}>Optimum</Text>
+                  <TextInput
+                    style={styles.numberInput}
+                    value={formData.nbAerateurs === 0 ? '' : formData.nbAerateurs.toString()}
+                    onChangeText={text => setFormData({...formData, nbAerateurs: Number(text) || 0})}
                     keyboardType="numeric"
                     placeholder="0"
                   />
@@ -1271,8 +1334,8 @@ ${currentDate} ${currentTime}
                   <Text style={styles.label}>Trépied électrique</Text>
                   <TextInput
                     style={styles.numberInput}
-                    value={formData.trepiedElectrique === 0 ? '' : formData.trepiedElectrique.toString()}
-                    onChangeText={(value) => setFormData({...formData, trepiedElectrique: Number(value) || 0})}
+                    value={formData.nbTrepiedElectrique === 0 ? '' : formData.nbTrepiedElectrique.toString()}
+                    onChangeText={text => setFormData({...formData, nbTrepiedElectrique: Number(text) || 0})}
                     keyboardType="numeric"
                     placeholder="0"
                   />
@@ -1280,513 +1343,962 @@ ${currentDate} ${currentTime}
               </View>
 
               {/* Section Puits de lumière */}
-              <View style={styles.dimSectionContainer}>
-                <Text style={styles.subSectionHeader}>Puits de lumière (en pouces)</Text>
+              <View style={styles.puitsLumiereSection}>
+                <Text style={styles.subSectionHeader}>Puits de lumière</Text>
                 
-                {formData.puitsLumiere.map((puit, index) => (
-                  <View key={`puit-${index}`} style={[styles.dimSetContainer, { marginBottom: 10 }]}>
+                {formData.puitsLumiere.map((puits, index) => (
+                  <View key={`puits-${index}`} style={styles.dimSetContainer}>
                     <View style={styles.sectionHeaderRow}>
-                      <TextInput
-                        style={styles.sectionNameInput}
-                        value={puit.name}
+                      <TextInput 
+                        style={styles.sectionNameInput} 
+                        value={puits.name} 
                         onChangeText={(text) => {
                           const newPuits = [...formData.puitsLumiere];
                           newPuits[index].name = text;
                           setFormData({...formData, puitsLumiere: newPuits});
-                        }}
-                        placeholder={`Puit ${index + 1}`}
+                        }} 
+                        placeholder={`Puits ${index + 1}`} 
                       />
                     </View>
-
+                    
                     <View style={styles.dimRow}>
-                      <View style={styles.pickerContainer}>
-                        <Text style={styles.pickerLabel}>Longueur (pouces)</Text>
-                        <TextInput
-                          style={[styles.numberInput, { height: 45 }]}
-                          value={puit.length === 0 ? '' : puit.length.toString()}
-                          onChangeText={(value) => handlePuitLumiereChange(index, 'length', value)}
-                          keyboardType="numeric"
-                          placeholder="0"
-                        />
-                      </View>
-
-                      <Text style={styles.multiply}>×</Text>
-
                       <View style={styles.pickerContainer}>
                         <Text style={styles.pickerLabel}>Largeur (pouces)</Text>
                         <TextInput
-                          style={[styles.numberInput, { height: 45 }]}
-                          value={puit.width === 0 ? '' : puit.width.toString()}
+                          style={styles.numberInput}
+                          value={puits.width === 0 ? '' : puits.width.toString()}
                           onChangeText={(value) => handlePuitLumiereChange(index, 'width', value)}
                           keyboardType="numeric"
                           placeholder="0"
                         />
                       </View>
+                      
+                      <Text style={styles.multiply}>×</Text>
+                      
+                      <View style={styles.pickerContainer}>
+                        <Text style={styles.pickerLabel}>Longueur (pouces)</Text>
+                        <TextInput
+                          style={styles.numberInput}
+                          value={puits.length === 0 ? '' : puits.length.toString()}
+                          onChangeText={(value) => handlePuitLumiereChange(index, 'length', value)}
+                          keyboardType="numeric"
+                          placeholder="0"
+                        />
+                      </View>
                     </View>
-
+                    
                     {index > 0 && (
                       <TouchableOpacity style={styles.removeSectionButton} onPress={() => removePuitLumiere(index)}>
                         <Text style={styles.deleteX}>✕</Text>
-                        <Text style={styles.removeSectionButtonText}>Supprimer ce puit</Text>
+                        <Text style={styles.removeSectionButtonText}>Supprimer ce puits</Text>
                       </TouchableOpacity>
                     )}
                   </View>
                 ))}
 
-                <View style={[styles.addSectionButtonContainer, { marginTop: 5 }]}>
-                  <TouchableOpacity style={[styles.addSectionButton, { paddingVertical: 10 }]} onPress={addPuitLumiere}>
+                <View style={styles.addSectionButtonContainer}>
+                  <TouchableOpacity style={styles.addSectionButton} onPress={addPuitLumiere}>
                     <Text style={{color: '#3498db', fontSize: 16}}>➕</Text>
-                    <Text style={styles.addSectionButtonText}>Ajouter un puit de lumière</Text>
+                    <Text style={styles.addSectionButtonText}>Ajouter un puits de lumière</Text>
                   </TouchableOpacity>
                 </View>
               </View>
             </View>
-          )}
+          </View>
 
-          {/* Section Options */}
-          <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('options')}>
-            <FontAwesome5 name="cogs" size={20} color="white" />
-            <Text style={styles.sectionTitle}>Autres options</Text>
-            <FontAwesome5 name={openSections.includes('options') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-          </TouchableOpacity>
-          
-          {openSections.includes('options') && (
-            <View style={[styles.sectionContent, styles.nonPickerSection]}>
-              <TouchableOpacity 
-                style={styles.checkboxItem} 
-                onPress={() => setFormData({...formData, plusieursEpaisseurs: !formData.plusieursEpaisseurs})}
-              >
-                <Text style={{fontSize: 32, color: '#3498db'}}>
-                  {formData.plusieursEpaisseurs ? '☑' : '☐'}
-                </Text>
-                <Text style={styles.checkboxLabel}>Plusieurs épaisseurs de toiture</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.checkboxItem} 
-                onPress={() => setFormData({...formData, hydroQuebec: !formData.hydroQuebec})}
-              >
-                <Text style={{fontSize: 32, color: '#3498db'}}>
-                  {formData.hydroQuebec ? '☑' : '☐'}
-                </Text>
-                <Text style={styles.checkboxLabel}>Travaux Hydro Québec requis</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.checkboxItem} 
-                onPress={() => setFormData({...formData, grue: !formData.grue})}
-              >
-                <Text style={{fontSize: 32, color: '#3498db'}}>
-                  {formData.grue ? '☑' : '☐'}
-                </Text>
-                <Text style={styles.checkboxLabel}>Grue nécessaire</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.checkboxItem} 
-                onPress={() => setFormData({...formData, trackfall: !formData.trackfall})}
-              >
-                <Text style={{fontSize: 32, color: '#3498db'}}>  
-                  {formData.trackfall ? '☑' : '☐'}
-                </Text>
-                <Text style={styles.checkboxLabel}>Trackfall et chute</Text>
-              </TouchableOpacity>
+          {/* Section Options - Checkboxes compactes */}
+          <View style={styles.sectionWrapper}>
+            <Text style={styles.compactSectionTitle}>
+              <FontAwesome5 name="check-square" size={14} color="#2c3e50" /> Options spéciales
+            </Text>
+            
+            <View style={styles.compactSectionContent}>
+              <View style={styles.checkboxGrid}>
+                <TouchableOpacity 
+                  style={styles.compactCheckbox} 
+                  onPress={() => setFormData({...formData, plusieursEpaisseurs: !formData.plusieursEpaisseurs})}
+                >
+                  <FontAwesome5 
+                    name={formData.plusieursEpaisseurs ? "check-square" : "square"} 
+                    size={18} 
+                    color="#3498db" 
+                  />
+                  <Text style={styles.compactCheckboxLabel}>Plusieurs épaisseurs</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.compactCheckbox} 
+                  onPress={() => setFormData({...formData, hydroQuebec: !formData.hydroQuebec})}
+                >
+                  <FontAwesome5 
+                    name={formData.hydroQuebec ? "check-square" : "square"} 
+                    size={18} 
+                    color="#3498db" 
+                  />
+                  <Text style={styles.compactCheckboxLabel}>Hydro Québec</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.compactCheckbox} 
+                  onPress={() => setFormData({...formData, grue: !formData.grue})}
+                >
+                  <FontAwesome5 
+                    name={formData.grue ? "check-square" : "square"} 
+                    size={18} 
+                    color="#3498db" 
+                  />
+                  <Text style={styles.compactCheckboxLabel}>Grue nécessaire</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.compactCheckbox} 
+                  onPress={() => setFormData({...formData, trackfall: !formData.trackfall})}
+                >
+                  <FontAwesome5 
+                    name={formData.trackfall ? "check-square" : "square"} 
+                    size={18} 
+                    color="#3498db" 
+                  />
+                  <Text style={styles.compactCheckboxLabel}>Trackfall</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          )}
+          </View>
 
-          {/* Section Notes */}
-          <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('notes')}>
-            <FontAwesome5 name="sticky-note" size={20} color="white" />
-            <Text style={styles.sectionTitle}>Notes supplémentaires</Text>
-            <FontAwesome5 name={openSections.includes('notes') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-          </TouchableOpacity>
-          
-          {openSections.includes('notes') && (
-            <View style={[styles.sectionContent, styles.nonPickerSection]}>
+          {/* Section Notes - Plus compacte */}
+          <View style={styles.sectionWrapper}>
+            <Text style={styles.compactSectionTitle}>
+              <FontAwesome5 name="sticky-note" size={14} color="#2c3e50" /> Notes
+            </Text>
+            
+            <View style={styles.compactSectionContent}>
               <TextInput
-                style={styles.notesInput}
+                style={styles.compactNotesInput}
                 multiline
-                numberOfLines={4}
+                numberOfLines={3}
                 value={formData.notes}
                 onChangeText={text => setFormData({...formData, notes: text})}
-                placeholder="Décrivez ici toute information supplémentaire importante..."
+                placeholder="Informations supplémentaires..."
+                placeholderTextColor="#95a5a6"
               />
             </View>
-          )}
+          </View>
 
-          {/* Section Photos avec style Evernote AMÉLIORÉ */}
-          <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('photos')}>
-            <FontAwesome5 name="camera" size={20} color="white" />
-            <Text style={styles.sectionTitle}>Photos du projet</Text>
-            <FontAwesome5 name={openSections.includes('photos') ? 'chevron-up' : 'chevron-down'} size={20} color="white" />
-          </TouchableOpacity>
-
-          {openSections.includes('photos') && (
-            <View style={[styles.sectionContent, styles.nonPickerSection, styles.photosSectionEvernote]}>
-              {/* Bouton d'ajout en haut */}
-              <TouchableOpacity style={styles.addPhotoButtonEvernote} onPress={openCustomCamera}>
-                <FontAwesome5 name="camera" size={20} color="white" />
-                <Text style={styles.addPhotoTextEvernote}>Ajouter des photos</Text>
-              </TouchableOpacity>
-              
-              {/* Liste des photos */}
-              {photos.length > 0 && (
-                <>
-                  {photos.map((photo, index) => (
-                    <TouchableOpacity 
-                      key={photo.id} 
-                      style={styles.photoItemEvernote}
-                      onPress={() => setSelectedPhoto(photo)}
-                      activeOpacity={0.9}
-                    >
-                      <Image 
-                        source={{ uri: photo.uri }} 
-                        style={styles.photoEvernote}
-                        resizeMode="cover"
-                      />
-                      <TouchableOpacity 
-                        style={styles.deleteButtonEvernote} 
-                        onPress={() => deletePhoto(photo.id)}
-                      >
-                        <FontAwesome5 name="trash" size={16} color="white" />
-                      </TouchableOpacity>
-                      <View style={styles.photoNumber}>
-                        <Text style={styles.photoNumberText}>{index + 1}</Text>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                  
-                  <View style={styles.photoCountSummary}>
-                    <Text style={styles.photoCountText}>
-                      {photos.length} photo{photos.length > 1 ? 's' : ''} ajoutée{photos.length > 1 ? 's' : ''}
-                    </Text>
-                  </View>
-                </>
-              )}
-              
-              {/* Message si pas de photos */}
-              {photos.length === 0 && (
-                <View style={styles.noPhotosContainer}>
-                  <FontAwesome5 name="image" size={50} color="#dfe6e9" />
-                  <Text style={styles.noPhotosText}>Aucune photo ajoutée</Text>
-                </View>
-              )}
+          {/* Section Photos - Reste similaire mais avec header compact */}
+          <View style={styles.sectionWrapper}>
+            <Text style={styles.compactSectionTitle}>
+              <FontAwesome5 name="camera" size={14} color="#2c3e50" /> Photos ({photos.length})
+            </Text>
+            
+            <View style={styles.compactSectionContent}>
+              <View style={styles.photoGrid}>
+                <TouchableOpacity style={styles.addPhotoButton} onPress={openCustomCamera}>
+                  <FontAwesome5 name="camera" size={24} color="#3498db" />
+                  <Text style={styles.addPhotoText}>Ajouter photo</Text>
+                </TouchableOpacity>
+                
+                {photos.map((photo, index) => (
+                  <TouchableOpacity 
+                    key={photo.id} 
+                    style={styles.photoItem}
+                    onPress={() => viewPhoto(index)}
+                    onLongPress={() => deletePhoto(photo.id)}
+                  >
+                    <Image source={{ uri: photo.uri }} style={styles.photoImage} />
+                    <View style={styles.photoOverlay}>
+                      <Text style={styles.photoNumber}>{index + 1}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
-          )}
+          </View>
 
           {/* Boutons d'action */}
           <View style={styles.buttonContainer}>
-            <TouchableOpacity style={styles.mainSaveButton} onPress={handleEnregistrerComplet}>
-              <FontAwesome5 name="save" size={18} color="white" />
+            <TouchableOpacity style={styles.mainSaveButton} onPress={handleSaveSubmission}>
+              <FontAwesome5 name="save" size={20} color="white" />
               <Text style={styles.buttonText}>Enregistrer</Text>
             </TouchableOpacity>
             
             <TouchableOpacity style={styles.resetButton} onPress={resetForm}>
-              <FontAwesome5 name="redo" size={18} color="#2c3e50" />
+              <FontAwesome5 name="undo" size={20} color="#2c3e50" />
               <Text style={styles.resetButtonText}>Réinitialiser</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Caméra custom */}
-      <CustomCamera visible={showCamera} onClose={() => setShowCamera(false)} onPhotoTaken={handlePhotoTaken} />
-
-      {/* Visualiseur de photos */}
-      {selectedPhoto && (
-        <ImageViewerComponent 
-          photos={photos} 
-          initialIndex={photos.indexOf(selectedPhoto)} 
-          onClose={() => setSelectedPhoto(null)} 
-        />
+      {/* Modal Camera avec key unique pour forcer le démontage */}
+      {showCamera && (
+        <Modal
+          key={`camera-${forceRefresh}`}
+          animationType="slide"
+          transparent={false}
+          visible={true}
+          onRequestClose={handleCameraClose}
+        >
+          <CustomCamera
+            visible={true}
+            onPhotoTaken={handlePhotoTaken}
+            onClose={handleCameraClose}
+          />
+        </Modal>
       )}
 
-      {/* ✅ Modal de progression d'upload */}
-      <UploadProgressModal 
-        uploadProgress={uploadProgress} 
-        setUploadProgress={setUploadProgress} 
-      />
+      {/* Modal Visualiseur d'images */}
+      <Modal visible={showImageViewer} transparent={true} onRequestClose={() => setShowImageViewer(false)}>
+        <ImageViewer
+          imageUrls={photos.map(photo => ({ url: photo.uri }))}
+          index={currentImageIndex}
+          onSwipeDown={() => setShowImageViewer(false)}
+          enableSwipeDown={true}
+          backgroundColor="rgba(0,0,0,0.95)"
+          renderIndicator={(currentIndex, allSize) => (
+            <View style={styles.imageIndicator}>
+              <Text style={styles.imageIndicatorText}>{currentIndex}/{allSize}</Text>
+            </View>
+          )}
+        />
+        <TouchableOpacity
+          style={styles.closeImageViewer}
+          onPress={() => setShowImageViewer(false)}
+        >
+          <FontAwesome5 name="times" size={28} color="white" />
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Modal Upload */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={showUploadModal}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.uploadModalOverlay}>
+          <View style={styles.uploadModalContent}>
+            <Text style={styles.uploadTitle}>
+              {uploadProgress.status === 'completed' ? 'Terminé!' : 'Sauvegarde en cours...'}
+            </Text>
+            
+            {uploadProgress.status === 'uploading' && (
+              <>
+                <View style={styles.progressBar}>
+                  <View 
+                    style={[
+                      styles.progressFill, 
+                      { width: `${uploadProgress.percentage}%` }
+                    ]} 
+                  />
+                </View>
+                
+                <Text style={styles.progressText}>
+                  {uploadProgress.current}/{uploadProgress.total} photos uploadées
+                </Text>
+                
+                <Text style={styles.progressPercentage}>
+                  {uploadProgress.percentage}%
+                </Text>
+                
+                <ActivityIndicator size="large" color="#3498db" style={{ marginTop: 20 }} />
+              </>
+            )}
+            
+            {uploadProgress.status === 'completed' && (
+              <View style={styles.successContainer}>
+                <FontAwesome5 name="check-circle" size={60} color="#27ae60" />
+                <Text style={styles.successText}>Soumission enregistrée!</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       {/* Notification */}
       {notification.visible && (
-        <View style={[styles.notification, notification.type === 'success' ? styles.successNotification : styles.errorNotification]}>
-          <Text style={{color: 'white', fontSize: 20}}>{notification.type === 'success' ? '✅' : '⚠️'}</Text>
+        <View style={[
+          styles.notification,
+          notification.type === 'success' ? styles.successNotification : styles.errorNotification
+        ]}>
+          <FontAwesome5 
+            name={notification.type === 'success' ? 'check-circle' : 'exclamation-circle'} 
+            size={20} 
+            color="white" 
+          />
           <Text style={styles.notificationText}>{notification.message}</Text>
         </View>
       )}
-
-      <StatusBar style="light" />
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f7fa' },
-  formHeader: { backgroundColor: '#2c3e50', flexDirection: 'row', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 50 : 20, paddingBottom: 20, paddingHorizontal: 20 },
-  backButton: { flexDirection: 'row', alignItems: 'center', marginRight: 15 },
-  backText: { color: 'white', marginLeft: 8, fontSize: 16 },
-  headerContent: { flex: 1 },
-  title: { color: 'white', fontSize: 22, fontWeight: 'bold', marginBottom: 5 },
-  subtitle: { color: 'rgba(255, 255, 255, 0.8)', fontSize: 14 },
+  // Styles existants à conserver
+  container: { flex: 1, backgroundColor: '#f5f6fa' },
   scrollContainer: { flex: 1 },
-  sectionHeader: { backgroundColor: '#3498db', padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginHorizontal: 10, marginTop: 15, borderRadius: 8 },
-  sectionTitle: { color: 'white', fontSize: 16, fontWeight: '600', marginLeft: 10, flex: 1 },
-  sectionContent: { backgroundColor: 'white', padding: 15, marginHorizontal: 10, marginBottom: 10, borderRadius: 8 },
-  pickerSection: { zIndex: 9999, elevation: 9999 },
-  nonPickerSection: { zIndex: 1, elevation: 1 },
-  label: { marginBottom: 5, fontWeight: '500', color: '#2c3e50', fontSize: 14 },
-  input: { borderWidth: 1, borderColor: '#dfe6e9', borderRadius: 8, padding: 12, marginBottom: 15, backgroundColor: 'white', fontSize: 15 },
-  requiredInput: { borderColor: '#e74c3c', borderWidth: 2 },
-  grid: { flexDirection: 'row', justifyContent: 'space-between' },
-  gridItem: { width: '48%' },
-  dimRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 15 },
-  pickerContainer: { flex: 1 },
-  pickerLabel: { fontSize: 12, color: '#7f8c8d', marginBottom: 2 },
-  multiply: { fontWeight: 'bold', color: '#3498db', fontSize: 18, marginHorizontal: 5 },
-  materiauxGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', zIndex: 10000, elevation: 10000 },
-  materiauxItem: { width: '48%', marginBottom: 15, zIndex: 10001, elevation: 10001 },
-  deleteX: { color: '#e74c3c', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
-  checkboxItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', padding: 12, borderRadius: 8, marginBottom: 10 },
-  checkboxLabel: { marginLeft: 10, color: '#333', fontSize: 15 },
-  notesInput: { minHeight: 100, textAlignVertical: 'top', fontSize: 15, borderWidth: 1, borderColor: '#dfe6e9', borderRadius: 8, padding: 12, backgroundColor: 'white' },
-  buttonContainer: { marginHorizontal: 10, marginTop: 20, marginBottom: 30 },
-  mainSaveButton: { flexDirection: 'row', backgroundColor: '#2dbe60', padding: 18, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: 15, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5 },
-  resetButton: { flexDirection: 'row', backgroundColor: 'white', borderWidth: 1, borderColor: '#dfe6e9', padding: 15, borderRadius: 8, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 3.84, elevation: 3 },
-  buttonText: { color: 'white', fontWeight: '600', fontSize: 16, marginLeft: 8 },
-  resetButtonText: { color: '#2c3e50', fontWeight: '600', fontSize: 16, marginLeft: 8 },
-  notification: { position: 'absolute', bottom: 30, left: 20, right: 20, padding: 15, borderRadius: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5, zIndex: 99999 },
-  successNotification: { backgroundColor: '#27ae60' },
-  errorNotification: { backgroundColor: '#e74c3c' },
-  notificationText: { color: 'white', fontWeight: '500', marginLeft: 10 },
-  dimSetContainer: { marginTop: 5, padding: 5, backgroundColor: '#f8f9fa', borderRadius: 8, borderWidth: 1, borderColor: '#e9ecef', marginBottom: 20, zIndex: 9998, elevation: 9998, position: 'relative' },
-  addSectionButtonContainer: { width: '100%', marginTop: 5, marginBottom: 20 },
-  addSectionButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderWidth: 1, borderColor: '#3498db', borderRadius: 8, backgroundColor: 'rgba(52, 152, 219, 0.1)' },
-  addSectionButtonText: { color: '#3498db', marginLeft: 8, fontSize: 14 },
-  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  sectionNameInput: { flex: 1, borderWidth: 1, borderColor: '#ddd', borderRadius: 5, padding: 8, marginRight: 10, backgroundColor: '#fff' },
-  removeSectionButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 8, marginTop: 5 },
-  removeSectionButtonText: { color: '#e74c3c', marginLeft: 5, fontSize: 13 },
-  totalSurfaceContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 15, paddingTop: 15, borderTopWidth: 1, borderTopColor: '#3498db' },
-  totalSurfaceLabel: { fontSize: 16, fontWeight: '500', color: '#2c3e50' },
-  totalSurfaceValue: { fontSize: 18, fontWeight: 'bold', color: '#3498db' },
-  dimSectionContainer: { marginHorizontal: 0, marginTop: 0, marginBottom: 1, zIndex: 10000, elevation: 10000 },
-  subSectionHeader: { fontSize: 16, fontWeight: '600', color: '#2c3e50', marginBottom: 1, marginHorizontal: 30 },
-  phoneContainer: { flexDirection: 'row', alignItems: 'center', position: 'relative' },
-  phoneInput: { flex: 1, paddingRight: 50 },
-  callButton: { position: 'absolute', right: 8, top: 8, bottom: 8, width: 30, backgroundColor: '#27ae60', borderRadius: 6, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2, elevation: 2 },
+  formHeader: { backgroundColor: '#3498db', paddingTop: Platform.OS === 'ios' ? 50 : 30, paddingBottom: 20, paddingHorizontal: 15, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5 },
+  backButton: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  backText: { color: 'white', marginLeft: 10, fontSize: 16 },
+  headerContent: { marginLeft: 30 },
+  title: { fontSize: 24, fontWeight: 'bold', color: 'white' },
+  subtitle: { fontSize: 14, color: 'rgba(255,255,255,0.8)', marginTop: 5 },
+
+  // Nouveaux styles compacts
+  sectionWrapper: {
+    backgroundColor: 'white',
+    marginHorizontal: 10,
+    marginTop: 10,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
   
-  // Nouveau style pour les inputs numériques
+  compactSectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#2c3e50', // Couleur plus foncée
+    paddingHorizontal: 15,
+    paddingTop: 12,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#ecf0f1',
+  },
+  
+  compactSectionContent: {
+    padding: 15,
+  },
+  
+  inputGroup: {
+    marginBottom: 12,
+  },
+  
+  compactInput: {
+    borderWidth: 1,
+    borderColor: '#ecf0f1',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 15,
+    backgroundColor: '#f8f9fa',
+  },
+  
+  requiredInput: {
+    borderColor: '#e74c3c',
+  },
+  
+  gridRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  
+  halfWidth: {
+    flex: 1,
+  },
+  
+  phoneContainer: {
+    position: 'relative',
+  },
+  
+  phoneInput: {
+    paddingRight: 40,
+  },
+  
+  callButton: {
+    position: 'absolute',
+    right: 8,
+    top: 8,
+    bottom: 8,
+    width: 30,
+    backgroundColor: '#27ae60',
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  
+  // Styles pour dimensions
+  dimensionItem: {
+    marginBottom: 10,
+  },
+  
+  dimensionNameInput: {
+    borderWidth: 1,
+    borderColor: '#ecf0f1',
+    borderRadius: 6,
+    padding: 8,
+    marginBottom: 8,
+    fontSize: 14,
+    backgroundColor: '#f8f9fa',
+  },
+  
+  dimensionInputs: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  
+  dimensionNumberInput: {
+    borderWidth: 1,
+    borderColor: '#ecf0f1',
+    borderRadius: 6,
+    padding: 8,
+    width: 60,
+    textAlign: 'center',
+    fontSize: 14,
+    backgroundColor: '#f8f9fa',
+  },
+  
+  dimensionX: {
+    fontSize: 14,
+    color: '#7f8c8d',
+  },
+  
+  dimensionUnit: {
+    fontSize: 14,
+    color: '#7f8c8d',
+    marginRight: 10,
+  },
+  
+  compactAddButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#3498db',
+    borderRadius: 8,
+    backgroundColor: 'rgba(52, 152, 219, 0.05)',
+  },
+  
+  compactAddButtonText: {
+    color: '#3498db',
+    marginLeft: 6,
+    fontSize: 14,
+  },
+  
+  totalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#ecf0f1',
+  },
+  
+  totalLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#2c3e50',
+  },
+  
+  totalValue: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#3498db',
+  },
+  
+  // Styles pour matériaux - STYLES ORIGINAUX
+  materiauxGrid: {
+    marginBottom: 15,
+  },
+  
+  materiauxItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 15,
+  },
+  
+  label: {
+    fontSize: 15,
+    color: '#2c3e50',
+    flex: 1,
+  },
+  
   numberInput: {
-    height: 50,
     borderWidth: 1,
     borderColor: '#dfe6e9',
     borderRadius: 8,
-    paddingHorizontal: 15,
-    backgroundColor: 'white',
-    fontSize: 16,
-    color: '#2d3436',
+    padding: 10,
+    width: 80,
     textAlign: 'center',
+    fontSize: 16,
+    backgroundColor: 'white',
   },
   
-  // Styles pour les photos Evernote
-  photosSectionEvernote: { padding: 0, backgroundColor: '#f5f7fa' },
-  addPhotoButtonEvernote: { backgroundColor: '#3498db', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 15, margin: 15, borderRadius: 8 },
-  addPhotoTextEvernote: { color: 'white', fontSize: 16, fontWeight: '600', marginLeft: 10 },
-  photoItemEvernote: { marginHorizontal: 15, marginBottom: 15, borderRadius: 8, overflow: 'hidden', backgroundColor: 'white', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },
-  photoEvernote: { width: '100%', height: 300 },
-  deleteButtonEvernote: { position: 'absolute', top: 10, right: 10, backgroundColor: 'rgba(231, 76, 60, 0.9)', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
-  photoNumber: { position: 'absolute', top: 10, left: 10, backgroundColor: 'rgba(0, 0, 0, 0.7)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15 },
-  photoNumberText: { color: 'white', fontSize: 14, fontWeight: '600' },
-  noPhotosContainer: { alignItems: 'center', paddingVertical: 50 },
-  noPhotosText: { color: '#95a5a6', fontSize: 16, marginTop: 10 },
-  photoCountSummary: { alignItems: 'center', paddingVertical: 20, marginTop: 10 },
-  photoCountText: { color: '#666', fontSize: 14, fontStyle: 'italic' },
+  pickerSection: {
+    paddingHorizontal: 5,
+  },
   
-  // Styles pour le viewer
-  modalHeader: { position: 'absolute', top: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 50 : 30, paddingHorizontal: 20, paddingBottom: 20, backgroundColor: 'rgba(255, 255, 255, 0.95)', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', zIndex: 10 },
-  modalPhotoCounter: { color: '#333', fontSize: 18, fontWeight: '600' },
-  closeButtonFullScreen: { padding: 10 },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white' },
-  loadingText: { marginTop: 10, color: '#666', fontSize: 16 },
-  
-  // Styles pour le modal de progression
-  uploadModalOverlay: {
+  pickerContainer: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+    marginHorizontal: 5,
   },
-  uploadModalContainer: {
-    backgroundColor: 'white',
-    borderRadius: 16,
-    padding: 24,
-    minWidth: 320,
-    maxWidth: 400,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 10,
-  },
-  uploadModalHeader: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  uploadIconContainer: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#f8f9fa',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  uploadModalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#2c3e50',
-    textAlign: 'center',
-  },
-  mainProgressContainer: {
-    marginBottom: 20,
-  },
-  progressBarBackground: {
-    height: 8,
-    backgroundColor: '#ecf0f1',
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginBottom: 8,
-  },
-  progressBarFill: {
-    height: '100%',
-    borderRadius: 4,
-  },
-  percentageText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#2c3e50',
-    textAlign: 'center',
-  },
-  uploadStatusContainer: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  uploadStatusText: {
-    fontSize: 14,
+  
+  pickerLabel: {
+    fontSize: 13,
     color: '#7f8c8d',
-    textAlign: 'center',
-    marginBottom: 4,
+    marginBottom: 5,
   },
-  uploadCounterText: {
+  
+  multiply: {
+    fontSize: 20,
+    color: '#95a5a6',
+    marginHorizontal: 5,
+  },
+  
+  // Styles pour puits de lumière
+  puitsLumiereSection: {
+    marginTop: 20,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#ecf0f1',
+  },
+  
+  subSectionHeader: {
     fontSize: 16,
-    fontWeight: '500',
-    color: '#3498db',
-  },
-  photoStatusContainer: {
-    marginBottom: 16,
-  },
-  photoStatusTitle: {
-    fontSize: 14,
-    fontWeight: '500',
+    fontWeight: '600',
     color: '#2c3e50',
-    marginBottom: 12,
+    marginBottom: 15,
   },
-  photoIconsGrid: {
+  
+dimSetContainer: {
+    marginBottom: 15,
+    padding: 10,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  
+  sectionHeaderRow: {
+    marginBottom: 10,
+  },
+  
+  sectionNameInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    padding: 8,
+    backgroundColor: '#fff',
+  },
+  
+  dimRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  
+  addSectionButtonContainer: {
+    width: '100%',
+    marginTop: 5,
+    marginBottom: 20,
+  },
+  
+  addSectionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#3498db',
+    borderRadius: 8,
+    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+  },
+  
+  addSectionButtonText: {
+    color: '#3498db',
+    marginLeft: 8,
+    fontSize: 14,
+  },
+  
+  removeSectionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 8,
+    marginTop: 5,
+  },
+  
+  deleteX: {
+    color: '#e74c3c',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  
+  removeSectionButtonText: {
+    color: '#e74c3c',
+    marginLeft: 5,
+    fontSize: 13,
+  },
+  
+  // Styles pour checkboxes
+  checkboxGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    gap: 15,
+  },
+  
+  compactCheckbox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '48%',
+  },
+  
+  compactCheckboxLabel: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#2c3e50',
+  },
+  
+  // Styles pour notes
+  compactNotesInput: {
+    borderWidth: 1,
+    borderColor: '#ecf0f1',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 15,
+    backgroundColor: '#f8f9fa',
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  
+  // Styles pour photos
+  photoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  
+  addPhotoButton: {
+    width: 100,
+    height: 100,
+    borderWidth: 2,
+    borderColor: '#3498db',
+    borderRadius: 8,
+    borderStyle: 'dashed',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(52, 152, 219, 0.05)',
+  },
+  
+  addPhotoText: {
+    color: '#3498db',
+    fontSize: 12,
+    marginTop: 5,
+  },
+  
+  photoItem: {
+    width: 100,
+    height: 100,
+    borderRadius: 8,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  
+  photoImage: {
+    width: '100%',
+    height: '100%',
+  },
+  
+  photoOverlay: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderRadius: 12,
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  
+  photoNumber: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  
+  // Styles pour boutons
+  buttonContainer: {
+    marginHorizontal: 10,
+    marginTop: 20,
+    marginBottom: 30,
+  },
+  
+  mainSaveButton: {
+    flexDirection: 'row',
+    backgroundColor: '#27ae60',
+    padding: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  
+  resetButton: {
+    flexDirection: 'row',
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#ecf0f1',
+    padding: 14,
+    borderRadius: 10,
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  photoIconWrapper: {
-    alignItems: 'center',
-    margin: 4,
-  },
-  photoIconNumber: {
-    fontSize: 10,
+  
+  buttonText: {
+    color: 'white',
     fontWeight: '600',
-    marginTop: 2,
+    fontSize: 16,
+    marginLeft: 8,
   },
-  errorsContainer: {
-    backgroundColor: '#fdf2e9',
-    borderWidth: 1,
-    borderColor: '#f39c12',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-  },
-  errorsTitle: {
-    fontSize: 14,
+  
+  resetButtonText: {
+    color: '#2c3e50',
     fontWeight: '600',
-    color: '#e67e22',
-    marginBottom: 8,
+    fontSize: 16,
+    marginLeft: 8,
   },
-  errorText: {
-    fontSize: 12,
-    color: '#d35400',
-    marginBottom: 2,
-  },
-  closeUploadButton: {
-    backgroundColor: '#3498db',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
+  
+  
+  // Gardez tous les autres styles existants pour les modals, notifications, etc.
+  imageIndicator: {
+    position: 'absolute',
+    top: 50,
+    left: 0,
+    right: 0,
     alignItems: 'center',
   },
-  closeUploadButtonText: {
+  
+  imageIndicatorText: {
     color: 'white',
     fontSize: 16,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 15,
+    paddingVertical: 5,
+    borderRadius: 15,
+  },
+  
+  closeImageViewer: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    padding: 10,
+  },
+  
+  uploadModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  
+  uploadModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 15,
+    padding: 30,
+    width: '85%',
+    alignItems: 'center',
+  },
+  
+  uploadTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    marginBottom: 20,
+  },
+  
+  progressBar: {
+    width: '100%',
+    height: 10,
+    backgroundColor: '#ecf0f1',
+    borderRadius: 5,
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#3498db',
+  },
+  
+  progressText: {
+    fontSize: 14,
+    color: '#7f8c8d',
+    marginBottom: 5,
+  },
+  
+  progressPercentage: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#3498db',
+    marginTop: 10,
+  },
+  
+  successContainer: {
+    alignItems: 'center',
+  },
+  
+  successText: {
+    fontSize: 18,
+    color: '#27ae60',
+    marginTop: 15,
     fontWeight: '600',
   },
-  timeEstimate: {
-    fontSize: 12,
-    color: '#7f8c8d',
-    marginTop: 4,
-    fontStyle: 'italic',
-  },
-  progressTextContainer: {
+  
+  notification: {
+    position: 'absolute',
+    bottom: 30,
+    left: 20,
+    right: 20,
+    padding: 15,
+    borderRadius: 8,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 4,
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    zIndex: 99999,
   },
-  speedText: {
+  
+  successNotification: {
+    backgroundColor: '#27ae60',
+  },
+  
+  errorNotification: {
+    backgroundColor: '#e74c3c',
+  },
+  
+  notificationText: {
+    color: 'white',
+    fontWeight: '500',
+    marginLeft: 10,
+  },
+  
+  // Styles pour sections multiples
+  multiSectionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    borderWidth: 2,
+    borderColor: '#3498db',
+    borderRadius: 10,
+    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+  },
+  
+  multiSectionButtonText: {
+    color: '#3498db',
+    marginLeft: 10,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  
+  sectionSelector: {
+    marginBottom: 15,
+  },
+  
+  sectionSelectorTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 10,
+  },
+  
+  sectionTabs: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  
+  sectionTab: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#ecf0f1',
+    marginRight: 8,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  
+  activeTab: {
+    backgroundColor: '#3498db',
+  },
+  
+  sectionTabText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#7f8c8d',
+  },
+  
+  activeTabText: {
+    color: 'white',
+  },
+  
+  sectionTabInfo: {
     fontSize: 11,
     color: '#95a5a6',
-    fontStyle: 'italic',
+    marginTop: 2,
   },
-  statsContainer: {
+  
+  newSectionTab: {
+    backgroundColor: 'white',
+    borderWidth: 2,
+    borderColor: '#3498db',
+    borderStyle: 'dashed',
+  },
+  
+  newSectionTabText: {
+    color: '#3498db',
+    fontSize: 13,
+    marginTop: 2,
+  },
+  
+  sectionSummary: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 4,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#ecf0f1',
   },
-  errorCountText: {
-    fontSize: 12,
-    color: '#e74c3c',
-    fontWeight: '500',
-  },
-  completionSummary: {
-    backgroundColor: '#d5f4e6',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-  },
-  summaryText: {
-    fontSize: 14,
-    color: '#27ae60',
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  summaryErrorText: {
-    fontSize: 12,
-    color: '#e67e22',
-    marginBottom: 4,
-  },
-  summaryTimeText: {
-    fontSize: 12,
+  
+  sectionSummaryText: {
+    fontSize: 13,
     color: '#7f8c8d',
-    fontStyle: 'italic',
   },
+  sectionNameContainer: {
+  marginBottom: 15,
+  backgroundColor: '#f8f9fa',
+  padding: 12,
+  borderRadius: 8,
+},
+
+sectionNameLabel: {
+  fontSize: 13,
+  color: '#7f8c8d',
+  marginBottom: 5,
+},
+
+sectionNameInput: {
+  borderWidth: 1,
+  borderColor: '#ecf0f1',
+  borderRadius: 5,
+  paddingHorizontal: 12,
+  paddingVertical: 8,
+  fontSize: 15,
+  backgroundColor: '#fff',
+  color: '#2c3e50',
+},
 });
 
 export default SoumissionForm;

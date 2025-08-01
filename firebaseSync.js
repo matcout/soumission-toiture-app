@@ -32,7 +32,7 @@ static SYSTEM_FOLDERS = {
     color: '#3b82f6',
     order: 0,
     type: 'system',
-    filter: { type: 'status', value: 'assignment' }
+    filter: { type: 'folderId', value: 'assignments' } // ✅ folderId uniquement
   },
   pending: {
     slug: 'pending',
@@ -42,37 +42,48 @@ static SYSTEM_FOLDERS = {
     color: '#f59e0b',
     order: 1,
     type: 'system',
-    filter: { type: 'status', value: 'captured' }
+    filter: { type: 'folderId', value: 'pending' } // ✅ folderId uniquement
   }
-  };
+};
 
   // 🚀 INITIALISATION
-  static async initialize() {
-    console.log('🔥 Initialisation FirebaseSync...');
-    
-    try {
-      // Créer les dossiers système s'ils n'existent pas
-      for (const [key, folder] of Object.entries(this.SYSTEM_FOLDERS)) {
-        const folderRef = doc(db, 'folders', folder.slug);
-        const folderDoc = await getDoc(folderRef);
+static async initialize() {
+  console.log('🔥 Initialisation FirebaseSync...');
+  
+  try {
+    // Créer les dossiers système s'ils n'existent pas
+    for (const [key, folder] of Object.entries(this.SYSTEM_FOLDERS)) {
+      const folderRef = doc(db, 'folders', folder.slug);
+      const folderDoc = await getDoc(folderRef);
+      
+      if (!folderDoc.exists()) {
+        console.log(`📁 Création dossier système: ${folder.label} avec order=${folder.order}`);
+        await setDoc(folderRef, {
+          ...folder,
+          id: folder.slug, // ID = slug pour les dossiers système
+          createdAt: serverTimestamp(),
+          platform: 'system'
+        });
+        console.log(`✅ Dossier système créé: ${folder.label}`);
+      } else {
+        // 🆕 VÉRIFIER SI L'ORDRE EST CORRECT
+        const existingData = folderDoc.data();
+        console.log(`📋 Dossier existant: ${folder.label}, order actuel=${existingData.order}, order attendu=${folder.order}`);
         
-        if (!folderDoc.exists()) {
-          await setDoc(folderRef, {
-            ...folder,
-            id: folder.slug, // ID = slug pour les dossiers système
-            createdAt: serverTimestamp(),
-            platform: 'system'
-          });
-          console.log(`✅ Dossier système créé: ${folder.label}`);
+        // 🆕 METTRE À JOUR SI L'ORDRE EST INCORRECT
+        if (existingData.order !== folder.order) {
+          console.log(`🔧 Mise à jour order pour ${folder.label}: ${existingData.order} → ${folder.order}`);
+          await updateDoc(folderRef, { order: folder.order });
         }
       }
-      
-      return { success: true };
-    } catch (error) {
-      console.error('❌ Erreur initialisation:', error);
-      return { success: false, error: error.message };
     }
+    
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Erreur initialisation:', error);
+    return { success: false, error: error.message };
   }
+}
 
   // 📁 GESTION DES DOSSIERS
   static subscribeFolders(callback) {
@@ -84,19 +95,21 @@ static SYSTEM_FOLDERS = {
       const folders = {};
       const foldersList = [];
       
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        const folderData = {
-          ...data,
-          id: doc.id,
-          slug: data.slug || doc.id, // Fallback sur ID si pas de slug
-          // Créer la fonction de filtre
-          filterFn: this.createFilterFunction(data.filter || { type: 'slug', value: data.slug || doc.id })
-        };
-        
-        folders[folderData.slug] = folderData;
-        foldersList.push(folderData);
-      });
+    snapshot.forEach((doc) => {
+  const data = doc.data();
+  console.log(`📋 Dossier Firebase: ${data.label}, order=${data.order}, slug=${data.slug}`); // 🆕 LOG
+  
+  const folderData = {
+    ...data,
+    id: doc.id,
+    slug: data.slug || doc.id, // Fallback sur ID si pas de slug
+    // Créer la fonction de filtre
+    filterFn: this.createFilterFunction(data.filter || { type: 'slug', value: data.slug || doc.id })
+  };
+  
+  folders[folderData.slug] = folderData;
+  foldersList.push(folderData);
+});
       
       console.log(`✅ ${Object.keys(folders).length} dossiers synchronisés`);
       callback({ 
@@ -118,87 +131,82 @@ static SYSTEM_FOLDERS = {
   }
 
   // 📄 GESTION DES SOUMISSIONS
-  static subscribeSubmissions(callback) {
-    console.log('📄 Abonnement aux soumissions...');
+static subscribeSubmissions(callback) {
+  console.log('📄 Abonnement aux soumissions...');
+  
+  const q = query(collection(db, 'soumissions'), orderBy('createdAt', 'desc'));
+  
+  const unsubscribe = onSnapshot(q, (snapshot) => {
+    const submissions = [];
+    const seenIds = new Set();
     
-    const q = query(collection(db, 'soumissions'), orderBy('createdAt', 'desc'));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const submissions = [];
-      const seenIds = new Set();
-      
-      snapshot.forEach((doc) => {
-        if (!seenIds.has(doc.id)) {
-          seenIds.add(doc.id);
-          const data = doc.data();
-          
-          // Ajouter le slug du dossier si pas présent
-          let folderSlug = data.folderSlug;
-          if (!folderSlug) {
-            // Migration automatique basée sur le status
-            if (data.status === 'assignment') folderSlug = 'assignments';
-            else if (data.status === 'captured') folderSlug = 'pending';
-            else if (data.status === 'completed') folderSlug = 'completed';
-            else if (data.folderId) folderSlug = this.mapOldIdToSlug(data.folderId);
-          }
-          
-          submissions.push({
-            id: doc.id,
-            ...data,
-            folderSlug,
-            createdAt: data.createdAt?.toDate() || new Date(),
-            updatedAt: data.updatedAt?.toDate() || new Date()
-          });
+    snapshot.forEach((doc) => {
+      if (!seenIds.has(doc.id)) {
+        seenIds.add(doc.id);
+        const data = doc.data();
+        
+        // ✅ SIMPLE : Utiliser folderId directement ou fallback
+        let folderId = data.folderId;
+        if (!folderId) {
+          // Migration de dernière chance pour les anciennes données
+          if (data.status === 'assignment') folderId = 'assignments';
+          else if (data.status === 'captured') folderId = 'pending';
+          else if (data.status === 'completed') folderId = 'projet_2025_soumissions';
+          else folderId = 'pending'; // Fallback par défaut
         }
-      });
-      
-      console.log(`✅ ${submissions.length} soumissions synchronisées`);
-      callback({ 
-        success: true, 
-        data: submissions,
-        count: submissions.length 
-      });
-    }, (error) => {
-      console.error('❌ Erreur sync soumissions:', error);
-      callback({ 
-        success: false, 
-        error: error.message,
-        data: [],
-        count: 0
-      });
+        
+        submissions.push({
+          id: doc.id,
+          ...data,
+          folderId, // ✅ S'assurer que folderId est toujours présent
+          createdAt: data.createdAt?.toDate() || new Date(),
+          updatedAt: data.updatedAt?.toDate() || new Date()
+        });
+      }
     });
     
-    return unsubscribe;
-  }
+    console.log(`✅ ${submissions.length} soumissions synchronisées`);
+    callback({ 
+      success: true, 
+      data: submissions,
+      count: submissions.length 
+    });
+  }, (error) => {
+    console.error('❌ Erreur sync soumissions:', error);
+    callback({ 
+      success: false, 
+      error: error.message,
+      data: [],
+      count: 0
+    });
+  });
+  
+  return unsubscribe;
+}
+
 
   // 🔧 FONCTIONS UTILITAIRES
-  static createFilterFunction(filter) {
-    return (submissions) => {
-      if (!filter) return [];
-      
-      switch (filter.type) {
-        case 'status':
-          return submissions.filter(s => s.status === filter.value);
-          
-        case 'slug':
-          return submissions.filter(s => 
-            s.folderSlug === filter.value || 
-            // Compatibilité ancien système
-            s.folderId === filter.value ||
-            this.normalizeString(s.folderName) === this.normalizeString(filter.value)
-          );
-          
-        case 'year':
-          return submissions.filter(s => {
-            const year = new Date(s.createdAt).getFullYear();
-            return year === filter.value;
-          });
-          
-        default:
-          return [];
-      }
-    };
-  }
+static createFilterFunction(filter) {
+  return (submissions) => {
+    if (!filter) return [];
+    
+    // ✅ SIMPLE : Filtrer uniquement par folderId
+    if (filter.type === 'slug' || filter.type === 'folderId') {
+      return submissions.filter(s => s.folderId === filter.value);
+    }
+    
+    // Garder le filtre par année pour les dossiers projets
+    if (filter.type === 'year') {
+      return submissions.filter(s => {
+        const year = new Date(s.createdAt).getFullYear();
+        return year === filter.value;
+      });
+    }
+    
+    return [];
+  };
+}
+
 
   static generateSlug(text) {
     if (!text) return '';
@@ -219,93 +227,66 @@ static SYSTEM_FOLDERS = {
       .trim();
   }
 
-  // Mapping ancien système → nouveau
-  static mapOldIdToSlug(oldId) {
-    const mappings = {
-      'system_assignments': 'assignments',
-      'system_pending': 'pending',
-      'projet_2025_soumissions': 'completed',
-      'system_project2025': 'projet_2025',
-      // Ajouter d'autres mappings si nécessaire
-    };
-    
-    return mappings[oldId] || this.generateSlug(oldId);
-  }
 
   // 📝 CRUD SOUMISSIONS
-  static async createSubmission(submissionData, platform = 'unknown') {
-    try {
-      console.log('📝 Création soumission...');
-      
-      const dataToSave = {
-        ...submissionData,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        platform,
-        folderSlug: submissionData.folderSlug || 'pending'
-      };
-      
-      const docRef = await addDoc(collection(db, 'soumissions'), dataToSave);
-      
-      console.log('✅ Soumission créée:', docRef.id);
-      return { 
-        success: true, 
-        id: docRef.id 
-      };
-      
-    } catch (error) {
-      console.error('❌ Erreur création soumission:', error);
-      return { 
-        success: false, 
-        error: error.message 
-      };
-    }
+static async createSubmission(submissionData, platform = 'unknown') {
+  try {
+    console.log('📝 Création soumission...');
+    
+    const dataToSave = {
+      ...submissionData,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      platform,
+      folderId: submissionData.folderId || 'pending' // ✅ folderId par défaut
+    };
+    
+    const docRef = await addDoc(collection(db, 'soumissions'), dataToSave);
+    
+    console.log('✅ Soumission créée:', docRef.id);
+    return { 
+      success: true, 
+      id: docRef.id 
+    };
+    
+  } catch (error) {
+    console.error('❌ Erreur création soumission:', error);
+    return { 
+      success: false, 
+      error: error.message 
+    };
   }
+}
 
-  static async createAssignment(assignmentData, platform = 'unknown') {
-    return this.createSubmission({
-      ...assignmentData,
-      status: 'assignment',
-      folderSlug: 'assignments'
-    }, platform);
-  }
+static async createAssignment(assignmentData, platform = 'unknown') {
+  return this.createSubmission({
+    ...assignmentData,
+    folderId: 'assignments' // ✅ Directement dans assignments
+  }, platform);
+}
 
-  static async updateSubmission(submissionId, updateData) {
-    try {
-      console.log('✏️ Mise à jour soumission:', submissionId);
-      
-      // Si changement de status, ajuster le folderSlug
-      if (updateData.status && !updateData.folderSlug) {
-        switch (updateData.status) {
-          case 'assignment':
-            updateData.folderSlug = 'assignments';
-            break;
-          case 'captured':
-            updateData.folderSlug = 'pending';
-            break;
-          case 'completed':
-            updateData.folderSlug = 'completed';
-            break;
-        }
-      }
-      
-      const submissionRef = doc(db, 'soumissions', submissionId);
-      await updateDoc(submissionRef, {
-        ...updateData,
-        updatedAt: serverTimestamp()
-      });
-      
-      console.log('✅ Soumission mise à jour');
-      return { success: true };
-      
-    } catch (error) {
-      console.error('❌ Erreur mise à jour:', error);
-      return { 
-        success: false, 
-        error: error.message 
-      };
-    }
+static async updateSubmission(submissionId, updateData) {
+  try {
+    console.log('✏️ Mise à jour soumission:', submissionId);
+    
+    const submissionRef = doc(db, 'soumissions', submissionId);
+    await updateDoc(submissionRef, {
+      ...updateData,
+      updatedAt: serverTimestamp()
+    });
+    
+    console.log('✅ Soumission mise à jour');
+    return { success: true };
+    
+  } catch (error) {
+    console.error('❌ Erreur mise à jour soumission:', error);
+    return { 
+      success: false, 
+      error: error.message 
+    };
   }
+}
+
 
   static async deleteSubmission(submissionId) {
     try {
